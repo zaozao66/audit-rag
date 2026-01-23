@@ -1,0 +1,9 @@
+faiss-cpu>=1.6.5
+numpy>=1.21.0
+python-docx>=0.8.11
+pdfplumber>=0.7.6
+chardet>=5.0.0
+transformers>=4.20.0
+torch>=1.10.0
+openai>=1.0.0
+packaging

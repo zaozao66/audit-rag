@@ -1,0 +1,17 @@
+{
+  "embedding_model": {
+    "provider": "openai",
+    "model_name": "text-embedding-v4",
+    "api_key": "sk-60bf45825e4442728dc3431b1ffba0bc",
+    "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "dimension": 1024
+  },
+  "chunking": {
+    "chunk_size": 512,
+    "overlap": 50
+  },
+  "search": {
+    "top_k": 5,
+    "similarity_threshold": 0.5
+  }
+}
