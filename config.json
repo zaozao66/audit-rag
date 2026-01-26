@@ -13,5 +13,6 @@
   "search": {
     "top_k": 5,
     "similarity_threshold": 0.5
-  }
+  },
+  "vector_store_path": "./data/vector_store_text_embedding"
 }

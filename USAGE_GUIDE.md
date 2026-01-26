@@ -1,138 +1,232 @@
-# 阿里云RAG系统使用指南
+# RAG系统使用说明
 
-## 1. 系统概述
-
-本系统是一个基于阿里云text-embedding-v4模型的RAG（检索增强生成）系统，能够处理用户上传的文档并实现智能检索功能。
-
-## 2. 系统架构
+## 项目结构
 
 ```
-用户上传文档 (PDF/DOCX/TXT) 
-         ↓
-    文档解析
-         ↓
-    文本分块
-         ↓
-   阿里云API向量化 (text-embedding-v4)
-         ↓
-    向量存储 (Faiss)
-         ↓
-    相似性检索
-         ↓
-    结果返回
+audit-rag/
+├── main.py                 # 主程序入口（命令行接口）
+├── api_server.py           # HTTP API服务器
+├── cli_app.py              # 命令行接口应用程序
+├── config.json             # 配置文件
+├── requirements.txt        # 依赖包列表
+├── README.md               # 项目说明
+├── USAGE_GUIDE.md          # 本文件
+├── start.sh                # 命令行启动脚本
+├── start_api.sh            # HTTP API启动脚本
+├── src/                    # 源代码目录
+│   ├── __init__.py
+│   ├── config_loader.py    # 配置加载
+│   ├── document_chunker.py # 文档分块处理
+│   ├── document_processor.py # 文档格式处理
+│   ├── embedding_providers.py # 嵌入模型提供者
+│   ├── rag_processor.py    # RAG处理主逻辑
+│   └── vector_store.py     # 向量存储
+├── data/                   # 数据目录
+│   └── vector_store_text_embedding.*  # 向量库文件
+└── docs/                   # 文档目录
 ```
 
-## 3. 配置说明
+## 功能特性
 
-### 3.1 API密钥配置
+1. **文档存储**：将文档内容转换为向量并存储到向量数据库
+2. **文档搜索**：通过语义相似性搜索相关文档片段
+3. **多文件支持**：支持同时处理多个文档
+4. **持久化存储**：向量库可保存和加载，支持跨会话使用
+5. **HTTP API接口**：支持通过HTTP请求进行存储、搜索和清除操作
 
-在 `config.json` 中配置阿里云API密钥：
+## 使用方法
 
-```json
-{
-  "embedding_model": {
-    "provider": "openai",
-    "model_name": "text-embedding-v4",
-    "api_key": "sk-60bf45825e4442728dc3431b1ffba0bc",  // 替换为你的API密钥
-    "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "dimension": 1024
-  }
-}
-```
+### 1. 命令行接口
 
-### 3.2 分块参数
+#### 存储文档
 
-- `chunk_size`: 每个文本块的最大字符数（默认512）
-- `overlap`: 相邻块之间的重叠字符数（默认50）
-
-### 3.3 搜索参数
-
-- `top_k`: 返回最相似结果的数量（默认5）
-- `similarity_threshold`: 相似度阈值（默认0.5）
-
-## 4. 使用方法
-
-### 4.1 基础使用
+将文档存储到向量库：
 
 ```bash
-python3 full_aliyun_rag_system.py
+python main.py store --files /path/to/doc1.pdf /path/to/doc2.docx /path/to/doc3.txt
 ```
 
-系统将使用内置示例文档演示功能。
-
-### 4.2 处理用户文档
+指定自定义向量库存储路径：
 
 ```bash
-python3 full_aliyun_rag_system.py /path/to/doc1.pdf /path/to/doc2.docx /path/to/doc3.txt
+python main.py store --files /path/to/doc1.pdf --store-path ./my_custom_store
 ```
 
-### 4.3 交互式查询
+#### 搜索文档
 
-运行系统后，输入查询内容即可获得相关文档片段。
+从向量库中搜索相关文档：
 
-## 5. 文档格式支持
+```bash
+python main.py search --query "你的查询内容"
+```
 
-### 5.1 PDF文档
-- 支持文本PDF和扫描PDF（需OCR）
-- 自动提取文本内容
-- 保留章节结构
+交互式搜索模式：
 
-### 5.2 DOCX文档
-- 支持Word文档格式
-- 提取正文、标题、表格内容
-- 保持格式信息
+```bash
+python main.py search
+```
 
-### 5.3 TXT文档
-- 支持UTF-8编码的纯文本
-- 自动检测文件编码
-- 保持原始格式
+指定自定义向量库路径：
 
-## 6. 输出说明
+```bash
+python main.py search --query "查询内容" --store-path ./my_custom_store
+```
 
-系统返回的搜索结果包含：
+#### 清空向量库
 
-- **相似度分数**: 表示查询与文档的相关性（0-1之间）
-- **文档内容**: 匹配的文档片段
-- **来源信息**: 原始文档标识
+清空现有向量库：
 
-## 7. 性能优化建议
+```bash
+python main.py clear
+```
 
-### 7.1 文档预处理
-- 对于长文档，建议先进行摘要处理
-- 清理无关字符和格式
-- 合理设置分块大小
+指定自定义向量库路径：
 
-### 7.2 搜索优化
-- 调整top_k参数控制返回结果数量
-- 设置合适的相似度阈值过滤低质量结果
-- 使用精确查询词提高检索准确性
+```bash
+python main.py clear --store-path ./my_custom_store
+```
 
-## 8. 故障排除
+### 2. HTTP API接口
 
-### 8.1 API调用失败
-- 检查API密钥是否正确
-- 确认网络连接正常
-- 查看API配额是否充足
+启动HTTP API服务器：
 
-### 8.2 文档解析错误
-- 确认文档格式是否支持
-- 检查文档是否损坏
-- 验证文件编码是否正确
+```bash
+# 默认端口8000
+./start_api.sh
 
-### 8.3 搜索结果不佳
-- 调整分块大小和重叠参数
-- 优化查询词表达
-- 检查相似度阈值设置
+# 指定端口
+./start_api.sh 9000
+```
 
-## 9. 安全注意事项
+#### API端点
 
-- 妥善保管API密钥，避免泄露
-- 定期监控API调用次数和费用
-- 敏感文档请谨慎处理
+- `GET  /health` - 健康检查
+- `POST /store` - 存储文档(JSON格式)
+- `POST /upload_store` - 上传并存储文档(文件上传)
+- `POST /chunk_test` - 测试文档分块功能(文本输入)
+- `POST /chunk_test_upload` - 测试文档分块功能(文件上传)
+- `POST /search` - 搜索文档
+- `POST /clear` - 清空向量库
+- `GET  /info` - 系统信息
 
-## 10. 扩展功能
+#### 存储文档API
 
-- 支持批量文档处理
-- 向量库持久化存储
-- 自定义搜索算法
-- 结果后处理功能
+```bash
+curl -X POST http://localhost:8000/store \
+  -H "Content-Type: application/json" \
+  -d '{
+    "documents": [
+      {
+        "doc_id": "doc_1",
+        "title": "文档标题",
+        "text": "这里是文档的文本内容...",
+        "source": "example_source"
+      }
+    ]
+  }'
+```
+
+#### 上传并存储文档API (新功能)
+
+支持直接上传文件进行存储，支持PDF、DOCX、TXT等格式：
+
+```bash
+curl -X POST http://localhost:8000/upload_store \
+  -F "files=@/path/to/document1.pdf" \
+  -F "files=@/path/to/document2.docx" \
+  -F "files=@/path/to/document3.txt" \
+  -F "save_after_processing=true" \
+  -F "store_path=./custom_vector_store"
+```
+
+参数说明：
+- `files`: 要上传的一个或多个文件
+- `save_after_processing`: (可选) 处理后是否自动保存，默认为true
+- `store_path`: (可选) 自定义向量库存储路径
+- `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
+
+
+#### 测试文档分块API
+
+用于测试分块效果，不实际存储到向量库：
+
+```bash
+curl -X POST http://localhost:8000/chunk_test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "这里是需要分块的文档内容...",
+    "filename": "test_doc.txt",
+    "use_law_chunker": true,
+    "chunk_size": 512,
+    "overlap": 50
+  }'
+```
+
+参数说明：
+- `text`: (必需) 要分块的文档文本内容
+- `filename`: (可选) 文件名，默认为 "test_document.txt"
+- `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
+- `chunk_size`: (可选) 分块大小，默认为512
+- `overlap`: (可选) 块间重叠大小，默认为50
+
+返回结果包含分块的数量、每个块的预览以及分块详情。
+
+
+#### 上传文件测试文档分块API
+
+用于上传文件并测试分块效果，不实际存储到向量库：
+
+```bash
+curl -X POST http://localhost:8000/chunk_test_upload \
+  -F "file=@/path/to/document.pdf" \
+  -F "use_law_chunker=true" \
+  -F "chunk_size=512" \
+  -F "overlap=50"
+```
+
+参数说明：
+- `file`: (必需) 要上传的文件（支持PDF、DOCX、TXT格式）
+- `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
+- `chunk_size`: (可选) 分块大小，默认为512
+- `overlap`: (可选) 块间重叠大小，默认为50
+
+返回结果包含文件信息、分块的数量、每个块的预览以及分块详情。
+
+#### 搜索文档API
+
+```bash
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "搜索关键词",
+    "top_k": 5
+  }'
+```
+
+#### 清空向量库API
+
+```bash
+curl -X POST http://localhost:8000/clear
+```
+
+## 配置说明
+
+编辑 `config.json` 文件以调整以下参数：
+
+- `embedding_model`: 嵌入模型配置
+  - `api_key`: API密钥
+  - `model_name`: 使用的模型名称
+  - `endpoint`: API端点
+- `chunking`: 文档分块配置
+  - `chunk_size`: 分块大小
+  - `overlap`: 块间重叠大小
+- `search`: 搜索配置
+  - `top_k`: 返回结果数量
+  - `similarity_threshold`: 相似度阈值
+- `vector_store_path`: 向量库默认存储路径
+
+## 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
