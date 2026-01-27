@@ -317,15 +317,29 @@ def clear_vector_store():
         if rag_processor is None:
             rag_processor = initialize_rag_processor()
         
-        store_path = request.get_json().get('store_path') if request.is_json else None
+        store_path = None
+        if request.is_json:
+            data = request.get_json()
+            if data:  # 确保data不为None
+                store_path = data.get('store_path')
+        
         if store_path:
             rag_processor.vector_store_path = store_path
         
         # 清空向量库
         rag_processor.clear_vector_store()
         
-        # 保存清空的向量库
-        rag_processor.save_vector_store()
+        # 保存清空的向量库 - 为了避免在向量库未初始化时出错，我们先检查是否存在
+        try:
+            rag_processor.save_vector_store()
+        except ValueError as ve:
+            if "没有可保存的向量库" in str(ve):
+                # 如果向量库未初始化，创建一个新的空向量库并保存
+                from src.vector_store import VectorStore
+                rag_processor.vector_store = VectorStore(dimension=rag_processor.dimension or 1024)
+                rag_processor.save_vector_store()
+            else:
+                raise  # 重新抛出其他ValueError异常
         
         return jsonify({
             "success": True,
@@ -601,4 +615,10 @@ def run_server(host='0.0.0.0', port=8000):
 
 
 if __name__ == '__main__':
-    run_server()
+    import argparse
+    parser = argparse.ArgumentParser(description='RAG系统HTTP API服务器')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='服务器主机地址 (默认: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=8000, help='服务器端口 (默认: 8000)')
+    args = parser.parse_args()
+    
+    run_server(host=args.host, port=args.port)

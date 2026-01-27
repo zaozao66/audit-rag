@@ -1,0 +1,20 @@
+[Unit]
+Description=RAG System API Service
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/home/your_username/audit-rag
+ExecStart=/usr/bin/python3 /home/your_username/audit-rag/api_server.py --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# 环境变量（根据需要取消注释和修改）
+#Environment=PYTHONPATH=/home/your_username/audit-rag
+#Environment=CONFIG_PATH=/home/your_username/audit-rag/config.json
+
+[Install]
+WantedBy=multi-user.target

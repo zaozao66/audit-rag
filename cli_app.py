@@ -223,7 +223,20 @@ def main():
         
         # 清空向量库
         rag_processor.clear_vector_store()
-        logger.info(f"向量库已清空: {vector_store_path}")
+        
+        # 保存清空的向量库
+        try:
+            rag_processor.save_vector_store()
+        except ValueError as ve:
+            if "没有可保存的向量库" in str(ve):
+                # 如果向量库未初始化，创建一个新的空向量库并保存
+                from src.vector_store import VectorStore
+                rag_processor.vector_store = VectorStore(dimension=rag_processor.dimension or 1024)
+                rag_processor.save_vector_store()
+            else:
+                raise  # 重新抛出其他ValueError异常
+        
+        logger.info(f"向量库已清空并保存: {vector_store_path}")
     else:
         parser.print_help()
 

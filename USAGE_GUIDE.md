@@ -172,7 +172,7 @@ curl -X POST http://localhost:8000/chunk_test \
 - `chunk_size`: (可选) 分块大小，默认为512
 - `overlap`: (可选) 块间重叠大小，默认为50
 
-返回结果包含分块的数量、每个块的预览以及分块详情。
+返回结果包含分块的数量、每个块的预览以及分块详情.
 
 
 #### 上传文件测试文档分块API
@@ -194,7 +194,7 @@ curl -X POST http://localhost:8000/chunk_test_upload \
 - `chunk_size`: (可选) 分块大小，默认为512
 - `overlap`: (可选) 块间重叠大小，默认为50
 
-返回结果包含文件信息、分块的数量、每个块的预览以及分块详情。
+返回结果包含文件信息、分块的数量、每个块的预览以及分块详情.
 
 #### 搜索文档API
 
@@ -231,6 +231,136 @@ curl -X POST http://localhost:8000/search_rerank \
 ```bash
 curl -X POST http://localhost:8000/clear
 ```
+
+### 3. Linux服务器部署
+
+系统支持在Linux服务器上后台运行，便于长期部署。
+
+#### 后台运行模式
+
+启动后台服务（默认端口8000）：
+
+```bash
+# 启动后台服务
+./start_daemon.sh
+
+# 指定端口启动后台服务
+./start_daemon.sh 9000
+```
+
+停止后台服务：
+
+```bash
+./stop_daemon.sh
+```
+
+重启后台服务：
+
+```bash
+# 重启服务（使用默认端口）
+./restart_daemon.sh
+
+# 重启服务（指定端口）
+./restart_daemon.sh 9000
+```
+
+查看服务状态和日志：
+
+```bash
+# 查看运行日志
+tail -f logs/api_server.log
+
+# 查看进程状态
+ps aux | grep api_server
+```
+
+#### 后台运行特性
+
+- 服务在后台持续运行，不会因终端关闭而停止
+- 自动将日志输出到 `logs/api_server.log` 文件
+- 使用PID文件跟踪进程状态，防止重复启动
+- 支持优雅启动和停止
+- 提供重启脚本便于维护
+
+#### 使用 systemd 部署 (推荐用于生产环境)
+
+对于Linux服务器，推荐使用systemd服务进行部署，这种方式更稳定可靠。
+
+##### 方法一：使用自动化部署脚本（推荐）
+
+系统提供了一个自动化部署脚本，可以一键完成所有部署步骤：
+
+```bash
+# 查看使用帮助
+./deploy.sh --help
+
+# 基本部署（使用默认设置）
+./deploy.sh
+
+# 指定安装目录和端口
+./deploy.sh --dir /opt/audit-rag --port 8080
+
+# 仅部署代码，不安装systemd服务
+./deploy.sh --no-service
+```
+
+部署脚本会自动：
+- 复制所有必要文件到目标目录
+- 安装Python依赖
+- 配置systemd服务（如果未指定--no-service）
+- 设置开机自启
+- 启动服务
+
+##### 方法二：手动部署
+
+如果你不想使用自动化脚本，也可以手动部署：
+
+1. 编辑 `rag-api.service.example` 文件，修改其中的路径和用户名：
+
+```bash
+# 编辑服务配置
+nano rag-api.service.example
+```
+
+将其中的 `your_username` 替换为实际用户名，将路径替换为实际部署路径。
+
+2. 复制服务文件到systemd目录：
+
+```bash
+sudo cp rag-api.service.example /etc/systemd/system/rag-api.service
+```
+
+3. 重新加载systemd配置：
+
+```bash
+sudo systemctl daemon-reload
+```
+
+4. 启动服务：
+
+```bash
+sudo systemctl start rag-api
+```
+
+5. 设置开机自启：
+
+```bash
+sudo systemctl enable rag-api
+```
+
+6. 查看服务状态：
+
+```bash
+sudo systemctl status rag-api
+```
+
+7. 查看服务日志：
+
+```bash
+sudo journalctl -u rag-api -f
+```
+
+systemd服务方式提供了更好的进程管理和系统集成，适合在生产环境中使用。
 
 ## 配置说明
 
