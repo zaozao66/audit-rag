@@ -19,6 +19,7 @@ from src.embedding_providers import TextEmbeddingProvider
 from src.rag_processor import RAGProcessor, process_user_uploaded_documents
 from src.document_chunker import DocumentChunker
 from src.law_document_chunker import LawDocumentChunker
+from src.rerank_provider import AliyunRerankProvider, MockRerankProvider
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,12 +32,14 @@ app = Flask(__name__)
 rag_processor = None
 
 
-def initialize_rag_processor(use_law_chunker: bool = True):
+def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = False):
     """初始化RAG处理器"""
     global rag_processor
     
     # 如果指定了使用法规分块器，且当前处理器不是法规分块器，则重新初始化
-    if rag_processor is not None and rag_processor.use_law_chunker != use_law_chunker:
+    # 或者如果重排序设置发生变化
+    if rag_processor is not None and (rag_processor.use_law_chunker != use_law_chunker or 
+                                      (rag_processor.rerank_provider is not None) != use_rerank):
         rag_processor = None
     
     if rag_processor is None:
@@ -58,6 +61,26 @@ def initialize_rag_processor(use_law_chunker: bool = True):
                 model_name=model_name
             )
             
+            # 创建重排序提供者
+            rerank_provider = None
+            if use_rerank:
+                logger.info("创建重排序提供者...")
+                try:
+                    # 从配置中获取重排序API配置
+                    rerank_config = config.get('rerank_model', {})
+                    if 'api_key' in rerank_config and rerank_config['api_key']:
+                        rerank_provider = AliyunRerankProvider(
+                            api_key=rerank_config['api_key'],
+                            model_name=rerank_config.get('model_name', 'gte-rerank'),
+                            endpoint=rerank_config.get('endpoint', 'https://dashscope.aliyuncs.com/api/v1/services/rerank/text-retrieve-rerank')
+                        )
+                    else:
+                        logger.warning("重排序API密钥未配置，使用模拟重排序提供者")
+                        rerank_provider = MockRerankProvider()
+                except Exception as e:
+                    logger.error(f"创建重排序提供者失败: {e}，使用模拟重排序提供者")
+                    rerank_provider = MockRerankProvider()
+            
             # 获取配置参数
             chunk_size = config['chunking']['chunk_size']
             overlap = config['chunking']['overlap']
@@ -72,7 +95,8 @@ def initialize_rag_processor(use_law_chunker: bool = True):
                 chunk_size=chunk_size,
                 overlap=overlap,
                 vector_store_path=vector_store_path,
-                use_law_chunker=use_law_chunker
+                use_law_chunker=use_law_chunker,
+                rerank_provider=rerank_provider
             )
             
             logger.info("RAG处理器初始化完成")
@@ -196,6 +220,80 @@ def search_documents():
             "query": query,
             "results": formatted_results,
             "count": len(formatted_results)
+        })
+        
+    except ValueError as e:
+        # 特别处理向量库不存在的错误
+        if "向量库不存在" in str(e):
+            return jsonify({"error": "向量库不存在，请先存储文档"}), 404
+        else:
+            logger.error(f"搜索文档时出错: {e}")
+            return jsonify({"error": f"搜索文档失败: {str(e)}"}), 500
+    except Exception as e:
+        logger.error(f"搜索文档时出错: {e}")
+        return jsonify({"error": f"搜索文档失败: {str(e)}"}), 500
+
+
+@app.route('/search_rerank', methods=['POST'])
+def search_documents_with_rerank():
+    """带重排序的搜索文档接口"""
+    global rag_processor
+    try:
+        # 获取请求参数
+        use_rerank = True
+        use_law_chunker = False  # 重排序功能不直接影响分块器的选择，但我们可以根据需要设置
+        
+        # 初始化RAG处理器
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker, use_rerank=use_rerank)
+        elif (rag_processor.rerank_provider is None) != (not use_rerank):
+            # 如果重排序设置不匹配，重新初始化
+            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker, use_rerank=use_rerank)
+        
+        # 检查请求数据
+        if not request.is_json:
+            return jsonify({"error": "请求必须是JSON格式"}), 400
+        
+        data = request.get_json()
+        
+        # 检查必需字段
+        if 'query' not in data:
+            return jsonify({"error": "缺少query字段"}), 400
+        
+        query = data['query']
+        top_k = data.get('top_k', 5)
+        rerank_top_k = data.get('rerank_top_k', 10)  # 重排序时考虑的文档数量
+        store_path = data.get('store_path')
+        
+        if store_path:
+            rag_processor.vector_store_path = store_path
+        
+        # 执行带重排序的搜索
+        results = rag_processor.search(query, top_k=top_k, use_rerank=True, rerank_top_k=rerank_top_k)
+        
+        # 格式化结果
+        formatted_results = []
+        for result in results:
+            result_entry = {
+                "score": result['score'],
+                "text": result['document']['text'],
+                "doc_id": result['document'].get('doc_id', ''),
+                "filename": result['document'].get('filename', ''),
+                "file_type": result['document'].get('file_type', '')
+            }
+            
+            # 如果有原始分数，也包含进去
+            if 'original_score' in result:
+                result_entry["original_score"] = result['original_score']
+            
+            formatted_results.append(result_entry)
+        
+        return jsonify({
+            "success": True,
+            "query": query,
+            "results": formatted_results,
+            "count": len(formatted_results),
+            "with_rerank": True
         })
         
     except ValueError as e:

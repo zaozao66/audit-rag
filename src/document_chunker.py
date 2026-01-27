@@ -77,19 +77,18 @@ class DocumentChunker:
         # 定义语义分割的正则表达式模式
         # 匹配标题和条款，如 "第一条"、"第一章"、"第一节" 等
         patterns = [
-            r'第[一二三四五六七八九十\d]+[条章节][\s\S]*?(?=(?:第[一二三四五六七八九十\d]+[条章节]|$))',  # 条、章、节
-            r'[一二三四五六七八九十\d]+[、．.]?\s*[\s\S]*?(?=(?:[一二三四五六七八九十\d]+[、．.]?\s*|$))',  # 数字编号
-            r'\d+\.\s*[\s\S]*?(?=(?:\d+\.\s*|$))',  # 点号编号
-            r'[（\(][一二三四五六七八九十][）\)]\s*[\s\S]*?(?=(?:[（\(][一二三四五六七八九十][）\)]\s*|$))',  # 中文括号编号
-            r'[\s\n]+(?=\n*[^\s\n])',  # 段落分割
+            r'第[一二三四五六七八九十\d]+[条章节][^第\n]*(?=第[一二三四五六七八九十\d]+[条章节]|$)',  # 条、章、节
+            r'[一二三四五六七八九十\d]+[、．.]?\s*[^一二三四五六七八九十\d\n]*(?=[一二三四五六七八九十\d]+[、．.]?\s*|$)',  # 数字编号
+            r'\d+\.[^一二三四五六七八九十\d\n]*(?=\d+\.|$)',  # 点号编号
+            r'[（\(][一二三四五六七八九十][）\)]\s*[^（\(]*(?=[（\(][一二三四五六七八九十][）\)]|$)',  # 中文括号编号
         ]
         
         # 优先使用更精确的分割模式
         for pattern in patterns[:3]:  # 只使用前三组最常用的模式
-            segments = re.split(pattern, text)
-            segments = [seg.strip() for seg in segments if seg.strip()]
-            if len(segments) > 1:
-                return segments
+            matches = re.findall(pattern, text)
+            matches = [match.strip() for match in matches if match.strip()]
+            if len(matches) > 1:
+                return matches
         
         # 如果没有找到语义边界，则按段落分割
         paragraphs = [p.strip() for p in text.split('\n') if p.strip()]

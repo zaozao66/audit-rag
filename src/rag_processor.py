@@ -4,6 +4,7 @@ from .vector_store import VectorStore
 from .document_chunker import DocumentChunker
 from .law_document_chunker import LawDocumentChunker
 from .embedding_providers import EmbeddingProvider
+from .rerank_provider import RerankProvider
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 class RAGProcessor:
     """RAG处理器主类 - 协调整个RAG流程"""
     
-    def __init__(self, embedding_provider: EmbeddingProvider, chunk_size: int = 512, overlap: int = 50, vector_store_path: str = "./vector_store_text_embedding", use_law_chunker: bool = False):
+    def __init__(self, embedding_provider: EmbeddingProvider, chunk_size: int = 512, overlap: int = 50, vector_store_path: str = "./vector_store_text_embedding", use_law_chunker: bool = False, rerank_provider: RerankProvider = None):
         """
         初始化RAG处理器
         :param embedding_provider: 嵌入提供者
@@ -21,17 +22,19 @@ class RAGProcessor:
         :param overlap: 块间重叠大小
         :param vector_store_path: 向量库存储路径
         :param use_law_chunker: 是否使用法规文档分块器
+        :param rerank_provider: 重排序提供者
         """
         self.embedding_provider = embedding_provider
         if use_law_chunker:
             self.chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
         else:
             self.chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
+        self.rerank_provider = rerank_provider
         self.vector_store = None
         self.dimension = None  # 将在第一次调用时确定
         self.vector_store_path = vector_store_path
         self.use_law_chunker = use_law_chunker
-        logger.info(f"RAG处理器初始化完成，使用{'法规' if use_law_chunker else '普通'}分块器")
+        logger.info(f"RAG处理器初始化完成，使用{'法规' if use_law_chunker else '普通'}分块器，重排序功能{'启用' if rerank_provider else '禁用'}")
     
     def process_documents(self, documents: List[Dict[str, Any]], save_after_processing: bool = True):
         """
@@ -87,11 +90,13 @@ class RAGProcessor:
         
         return len(chunks)
     
-    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 5, use_rerank: bool = False, rerank_top_k: int = 10) -> List[Dict[str, Any]]:
         """
         搜索相关文档
         :param query: 查询文本
         :param top_k: 返回前k个结果
+        :param use_rerank: 是否使用重排序
+        :param rerank_top_k: 重排序时考虑的文档数量
         :return: 搜索结果列表
         """
         # 检查向量库是否存在
@@ -108,17 +113,49 @@ class RAGProcessor:
         query_embeddings = self.embedding_provider.get_embeddings([query])
         query_embedding = query_embeddings[0]
         
-        # 执行搜索
-        results = self.vector_store.search(query_embedding, top_k=top_k)
+        # 执行初步搜索
+        initial_top_k = max(top_k * 2, rerank_top_k) if use_rerank else top_k
+        initial_results = self.vector_store.search(query_embedding, top_k=initial_top_k)
+        
+        # 如果需要重排序且有重排序提供者
+        if use_rerank and self.rerank_provider:
+            logger.info(f"执行重排序，初始结果数: {len(initial_results)}, 重排前取: {rerank_top_k}, 最终返回: {top_k}")
+            
+            # 提取文档文本
+            documents = [result['document']['text'] for result in initial_results]
+            
+            # 执行重排序
+            reranked_results = self.rerank_provider.rerank(query, documents, top_k=min(len(documents), rerank_top_k))
+            
+            # 将重排序结果与原始结果合并
+            final_results = []
+            for rerank_item in reranked_results[:top_k]:
+                original_index = rerank_item['index']
+                if original_index < len(initial_results):
+                    original_result = initial_results[original_index]
+                    # 更新分数为重排序分数
+                    updated_result = {
+                        'score': rerank_item['relevance_score'],
+                        'document': original_result['document'],
+                        'original_score': original_result['score']  # 保留原始相似度分数
+                    }
+                    final_results.append(updated_result)
+        else:
+            # 不使用重排序，直接返回初步搜索结果
+            final_results = initial_results[:top_k]
         
         # 强制显示所有搜索结果的完整文本（根据用户偏好）
         logger.info(f"查询: {query}")
         logger.info("搜索结果:")
-        for i, result in enumerate(results, 1):
-            logger.info(f"{i}. 相似度分数: {result['score']:.4f}")
-            logger.info(f"   文本: {result['document']['text']}")
+        for i, result in enumerate(final_results, 1):
+            original_score = result.get('original_score', result['score'])
+            if 'original_score' in result:
+                logger.info(f"{i}. 重排序分数: {result['score']:.4f} (原始分数: {original_score:.4f})")
+            else:
+                logger.info(f"{i}. 相似度分数: {result['score']:.4f}")
+            logger.info(f"   文本: {result['document']['text'][:200]}...")  # 只显示前200个字符
         
-        return results
+        return final_results
     
     def save_vector_store(self, filepath: str = None):
         """保存向量库"""

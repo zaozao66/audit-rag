@@ -6,6 +6,13 @@
     "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "dimension": 1024
   },
+  "rerank_model": {
+    "provider": "aliyun",
+    "model_name": "qwen3-rerank",
+    "api_key": "sk-60bf45825e4442728dc3431b1ffba0bc",
+    "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+    "dimension": 1024
+  },
   "chunking": {
     "chunk_size": 512,
     "overlap": 50

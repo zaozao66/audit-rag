@@ -106,6 +106,7 @@ python main.py clear --store-path ./my_custom_store
 - `POST /chunk_test` - 测试文档分块功能(文本输入)
 - `POST /chunk_test_upload` - 测试文档分块功能(文件上传)
 - `POST /search` - 搜索文档
+- `POST /search_rerank` - 搜索文档并重排序
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
 
@@ -144,6 +145,7 @@ curl -X POST http://localhost:8000/upload_store \
 - `save_after_processing`: (可选) 处理后是否自动保存，默认为true
 - `store_path`: (可选) 自定义向量库存储路径
 - `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
+  - 法规分块器会智能识别法规文档的层级结构，将子条款（如（一）、（二）、（三）等）与上级条款合并，而不是单独切分
 
 
 #### 测试文档分块API
@@ -166,6 +168,7 @@ curl -X POST http://localhost:8000/chunk_test \
 - `text`: (必需) 要分块的文档文本内容
 - `filename`: (可选) 文件名，默认为 "test_document.txt"
 - `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
+  - 法规分块器会智能识别法规文档的层级结构，将子条款（如（一）、（二）、（三）等）与上级条款合并，而不是单独切分
 - `chunk_size`: (可选) 分块大小，默认为512
 - `overlap`: (可选) 块间重叠大小，默认为50
 
@@ -187,6 +190,7 @@ curl -X POST http://localhost:8000/chunk_test_upload \
 参数说明：
 - `file`: (必需) 要上传的文件（支持PDF、DOCX、TXT格式）
 - `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
+  - 法规分块器会智能识别法规文档的层级结构，将子条款（如（一）、（二）、（三）等）与上级条款合并，而不是单独切分
 - `chunk_size`: (可选) 分块大小，默认为512
 - `overlap`: (可选) 块间重叠大小，默认为50
 
@@ -202,6 +206,25 @@ curl -X POST http://localhost:8000/search \
     "top_k": 5
   }'
 ```
+
+#### 带重排序的搜索文档API
+
+使用阿里云重排序模型对搜索结果进行二次排序，提升相关性：
+
+```bash
+curl -X POST http://localhost:8000/search_rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "搜索关键词",
+    "top_k": 5,
+    "rerank_top_k": 10
+  }'
+```
+
+参数说明：
+- `query`: (必需) 搜索查询文本
+- `top_k`: (可选) 返回前k个结果，默认为5
+- `rerank_top_k`: (可选) 重排序时考虑的文档数量，默认为10
 
 #### 清空向量库API
 
