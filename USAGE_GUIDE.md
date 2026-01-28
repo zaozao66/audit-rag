@@ -360,23 +360,160 @@ sudo systemctl status rag-api
 sudo journalctl -u rag-api -f
 ```
 
-systemd服务方式提供了更好的进程管理和系统集成，适合在生产环境中使用。
+systemd服务方式提供了更好的进程管理和系统集成，适合在生产环境中使用.
+
+## 开发与生产环境模式
+
+系统支持开发和生产两种环境模式，配置从 `config.json` 文件中读取：
+
+#### 环境配置差异
+
+| 配置项 | 开发环境 (`development`) | 生产环境 (`production`) |
+|--------|----------|----------|
+| 日志路径 | `./logs/api_server.log` | `/data/appLogs/api_server.log` |  
+| 嵌入模型 | `text-embedding-v4` | `bge` |
+| 重排序模型 | `qwen3-rerank` | `bge-reranker-large` |
+| API密钥 | `sk-60bf45825e4442728dc3431b1ffba0bc` | `sk-HiOOuMeh9lTdxW6v` |
+| 端点 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `https://ai-llm.nucc.com/v1/models` |
+| SSL验证 | 启用 | 禁用 |
+
+#### 启动方式
+
+**命令行启动：**
+
+开发环境：
+```bash
+python api_server.py --host 0.0.0.0 --port 8000 --env development
+```
+
+生产环境：
+```bash
+python api_server.py --host 0.0.0.0 --port 8000 --env production
+```
+
+**使用启动脚本：**
+
+开发环境：
+```bash
+./start_api.sh 8000 development
+```
+
+生产环境：
+```bash
+./start_api.sh 8000 production
+```
+
+**后台运行：**
+
+开发环境：
+```bash
+./start_daemon.sh 8000 development
+```
+
+生产环境：
+```bash
+./start_daemon.sh 8000 production
+```
+
+**环境变量方式：**
+
+也可以通过设置环境变量来指定运行模式：
+```bash
+export ENVIRONMENT=production
+python api_server.py --host 0.0.0.0 --port 8000
+```
+
+#### Systemd服务
+
+systemd服务配置文件 (`rag-api.service.example`) 默认配置为生产环境模式。
 
 ## 配置说明
 
 编辑 `config.json` 文件以调整以下参数：
 
-- `embedding_model`: 嵌入模型配置
-  - `api_key`: API密钥
-  - `model_name`: 使用的模型名称
-  - `endpoint`: API端点
-- `chunking`: 文档分块配置
-  - `chunk_size`: 分块大小
-  - `overlap`: 块间重叠大小
-- `search`: 搜索配置
-  - `top_k`: 返回结果数量
-  - `similarity_threshold`: 相似度阈值
-- `vector_store_path`: 向量库默认存储路径
+配置文件现在支持开发和生产两种环境模式，结构如下：
+
+```json
+{
+  "development": {
+    "embedding_model": {
+      "provider": "openai",
+      "model_name": "text-embedding-v4",
+      "api_key": "your-dev-api-key",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "dimension": 1024,
+      "ssl_verify": true
+    },
+    "rerank_model": {
+      "provider": "aliyun",
+      "model_name": "qwen3-rerank",
+      "api_key": "your-dev-api-key",
+      "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+      "dimension": 1024,
+      "ssl_verify": true
+    },
+    "chunking": {
+      "chunk_size": 512,
+      "overlap": 50
+    },
+    "search": {
+      "top_k": 5,
+      "similarity_threshold": 0.5
+    },
+    "vector_store_path": "./data/vector_store_text_embedding"
+  },
+  "production": {
+    "embedding_model": {
+      "provider": "openai",
+      "model_name": "bge",
+      "api_key": "your-prod-api-key",
+      "endpoint": "https://ai-llm.nucc.com/v1/models",
+      "dimension": 1024,
+      "ssl_verify": false
+    },
+    "rerank_model": {
+      "provider": "openai",
+      "model_name": "bge-reranker-large",
+      "api_key": "your-prod-api-key",
+      "endpoint": "https://ai-llm.nucc.com/v1/models",
+      "dimension": 1024,
+      "ssl_verify": false
+    },
+    "chunking": {
+      "chunk_size": 512,
+      "overlap": 50
+    },
+    "search": {
+      "top_k": 5,
+      "similarity_threshold": 0.5
+    },
+    "vector_store_path": "./data/vector_store_text_embedding"
+  },
+  "default_env": "development"
+}
+```
+
+- `development`: 开发环境配置
+  - `embedding_model`: 嵌入模型配置
+    - `api_key`: API密钥
+    - `model_name`: 使用的模型名称
+    - `endpoint`: API端点
+    - `ssl_verify`: 是否验证SSL证书
+  - `rerank_model`: 重排序模型配置
+    - `api_key`: API密钥
+    - `model_name`: 使用的模型名称
+    - `endpoint`: API端点
+    - `ssl_verify`: 是否验证SSL证书
+  - `chunking`: 文档分块配置
+    - `chunk_size`: 分块大小
+    - `overlap`: 块间重叠大小
+  - `search`: 搜索配置
+    - `top_k`: 返回结果数量
+    - `similarity_threshold`: 相似度阈值
+  - `vector_store_path`: 向量库默认存储路径
+
+- `production`: 生产环境配置（结构与开发环境相同）
+- `default_env`: 默认环境，当未指定ENVIRONMENT环境变量时使用的环境
 
 ## 安装依赖
 

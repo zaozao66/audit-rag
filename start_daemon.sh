@@ -4,11 +4,30 @@
 
 # 默认配置
 PORT=${1:-8000}
-LOG_FILE="./logs/api_server.log"
+MODE=${2:-development}  # 默认为开发模式
+
+# 根据模式设置日志文件
+if [ "$MODE" = "production" ]; then
+    LOG_FILE="/data/appLogs/api_server.log"
+    export ENVIRONMENT="production"
+    echo "启动生产环境模式"
+else
+    LOG_FILE="./logs/api_server.log"
+    export ENVIRONMENT="development"
+    echo "启动开发环境模式"
+fi
+
 PID_FILE="./api_server.pid"
 
 # 创建日志目录
-mkdir -p logs
+if [ "$MODE" = "production" ]; then
+    # 创建生产环境日志目录
+    sudo mkdir -p /data/appLogs
+    sudo chmod 755 /data/appLogs
+else
+    # 创建开发环境日志目录
+    mkdir -p logs
+fi
 
 # 检查进程是否已在运行
 if [ -f "$PID_FILE" ]; then
@@ -25,6 +44,7 @@ fi
 echo "RAG系统 - HTTP API服务器 (后台运行)"
 echo "==================================="
 echo "启动API服务器，端口: $PORT"
+echo "模式: $MODE"
 echo "日志文件: $LOG_FILE"
 echo "PID文件: $PID_FILE"
 

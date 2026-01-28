@@ -11,7 +11,7 @@ sleep 3
 
 # 启动服务
 if [ $# -gt 0 ]; then
-    ./start_daemon.sh $1
+    ./start_daemon.sh $1 $2
 else
     ./start_daemon.sh
 fi

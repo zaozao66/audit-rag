@@ -5,11 +5,11 @@ RAG系统 - HTTP API接口
 
 import logging
 import json
+import os
+import sys
 from typing import Dict, Any, List
 from flask import Flask, request, jsonify, Response
 from werkzeug.utils import secure_filename
-import sys
-import os
 
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -22,8 +22,32 @@ from src.law_document_chunker import LawDocumentChunker
 from src.rerank_provider import AliyunRerankProvider, MockRerankProvider
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 根据环境决定日志文件位置
+env = os.getenv('ENVIRONMENT', 'development')
+if env == 'production':
+    log_file = '/data/appLogs/api_server.log'
+else:
+    log_file = './logs/api_server.log'
+
+# 创建日志目录（如果不存在）
+log_dir = os.path.dirname(log_file)
+if log_dir and not os.path.exists(log_dir):
+    os.makedirs(log_dir, exist_ok=True)
+
+# 配置日志处理器
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+console_handler = logging.StreamHandler()
+
+# 设置日志格式
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+# 配置logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 # 创建Flask应用
 app = Flask(__name__)
@@ -48,17 +72,24 @@ def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = F
             logger.info("加载配置文件...")
             config = load_config()
             
-            # 创建嵌入提供者
+            # 获取环境信息
+            env = config.get('environment', 'development')
+            logger.info(f"当前运行环境: {env}")
+            
             logger.info("创建嵌入提供者...")
             embedding_config = config['embedding_model']
             api_key = embedding_config['api_key']
             endpoint = embedding_config['endpoint']
             model_name = embedding_config['model_name']
+            ssl_verify = embedding_config.get('ssl_verify', True)
             
+            # 创建嵌入提供者，支持SSL验证控制
             embedding_provider = TextEmbeddingProvider(
                 api_key=api_key,
                 endpoint=endpoint,
-                model_name=model_name
+                model_name=model_name,
+                ssl_verify=ssl_verify,
+                env=env
             )
             
             # 创建重排序提供者
@@ -66,13 +97,21 @@ def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = F
             if use_rerank:
                 logger.info("创建重排序提供者...")
                 try:
-                    # 从配置中获取重排序API配置
                     rerank_config = config.get('rerank_model', {})
+                    
                     if 'api_key' in rerank_config and rerank_config['api_key']:
+                        ssl_verify_rerank = rerank_config.get('ssl_verify', True)
+                        # 不再使用硬编码的默认值，因为在配置文件中已经定义了正确的值
+                        endpoint = rerank_config.get('endpoint')
+                        if not endpoint:
+                            # 如果配置中没有指定端点，使用空字符串，让AliyunRerankProvider使用其默认值
+                            endpoint = 'https://dashscope.aliyuncs.com/api/v1/services/rerank/text-retrieve-rerank'
                         rerank_provider = AliyunRerankProvider(
                             api_key=rerank_config['api_key'],
                             model_name=rerank_config.get('model_name', 'gte-rerank'),
-                            endpoint=rerank_config.get('endpoint', 'https://dashscope.aliyuncs.com/api/v1/services/rerank/text-retrieve-rerank')
+                            endpoint=endpoint,
+                            ssl_verify=ssl_verify_rerank,
+                            env=config.get('environment', 'development')
                         )
                     else:
                         logger.warning("重排序API密钥未配置，使用模拟重排序提供者")
@@ -99,7 +138,7 @@ def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = F
                 rerank_provider=rerank_provider
             )
             
-            logger.info("RAG处理器初始化完成")
+            logger.info(f"RAG处理器初始化完成，环境: {env}")
             return rag_processor
         except Exception as e:
             logger.error(f"初始化RAG处理器失败: {e}")
@@ -619,6 +658,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='RAG系统HTTP API服务器')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='服务器主机地址 (默认: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=8000, help='服务器端口 (默认: 8000)')
+    parser.add_argument('--env', type=str, default=None, help='运行环境 (production 或 development)')
     args = parser.parse_args()
+    
+    # 如果命令行指定了环境，则设置环境变量
+    if args.env:
+        import os
+        os.environ['ENVIRONMENT'] = args.env
     
     run_server(host=args.host, port=args.port)

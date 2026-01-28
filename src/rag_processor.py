@@ -68,7 +68,9 @@ class RAGProcessor:
         texts_for_embedding = [chunk['text'] for chunk in chunks]
         
         # 步骤3: 获取嵌入向量
+        logger.info(f"开始调用嵌入模型处理 {len(texts_for_embedding)} 个文本块")
         embeddings = self.embedding_provider.get_embeddings(texts_for_embedding)
+        logger.info(f"嵌入模型处理完成，获得 {len(embeddings)} 个向量")
         
         # 确定嵌入维度
         if self.dimension is None:
@@ -110,8 +112,10 @@ class RAGProcessor:
                 raise ValueError(error_msg)
         
         # 获取查询的嵌入向量
+        logger.info(f"开始调用嵌入模型处理查询: {query}")
         query_embeddings = self.embedding_provider.get_embeddings([query])
         query_embedding = query_embeddings[0]
+        logger.info(f"查询嵌入模型处理完成，获得向量维度: {len(query_embedding)}")
         
         # 执行初步搜索
         initial_top_k = max(top_k * 2, rerank_top_k) if use_rerank else top_k

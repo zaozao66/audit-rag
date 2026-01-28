@@ -24,6 +24,19 @@ class MockEmbeddingProvider(EmbeddingProvider):
         """
         import numpy as np
         
+        # 记录调用参数
+        logger.info(f"调用模拟嵌入模型，输入文本数量: {len(texts)}")
+        logger.info(f"模拟嵌入模型调用参数详情:")
+        logger.info(f"  输入文本内容: {texts}")
+        logger.info(f"  向量维度: {self.dimension}")
+        
+        # 打印模拟请求的URL、Headers和Body内容
+        logger.info(f"模拟嵌入模型API请求详情:")
+        logger.info(f"  URL: mock://embedding-provider/generate")
+        logger.info(f"  Method: MOCK")
+        logger.info(f"  Headers: {{'Content-Type': 'application/json', 'X-Mock-Provider': 'True'}}")
+        logger.info(f"  Request Body: {{'input': {texts}, 'dimension': {self.dimension}}}")
+        
         logger.info(f"生成 {len(texts)} 个文本的模拟嵌入向量")
         
         # 为每个文本生成一个固定维度的随机向量
@@ -42,6 +55,11 @@ class MockEmbeddingProvider(EmbeddingProvider):
             normalized_vector = [x/norm for x in vector]
             
             embeddings.append(normalized_vector)
+        
+        # 记录返回内容
+        logger.info(f"模拟嵌入模型API响应数据: 总计向量数={len(embeddings)}")
+        for j, emb in enumerate(embeddings):
+            logger.info(f"  向量 {j+1}: 维度={len(emb)}, 前5维=[{', '.join([f'{x:.4f}' for x in emb[:5]])}...]")
         
         logger.info(f"成功生成 {len(embeddings)} 个模拟嵌入向量")
         return embeddings

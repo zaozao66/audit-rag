@@ -1,0 +1,58 @@
+{
+  "development": {
+    "embedding_model": {
+      "provider": "openai",
+      "model_name": "text-embedding-v4",
+      "api_key": "your_development_api_key_here",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "dimension": 1024,
+      "ssl_verify": true
+    },
+    "rerank_model": {
+      "provider": "aliyun",
+      "model_name": "qwen3-rerank",
+      "api_key": "your_development_api_key_here",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-api/v1",
+      "dimension": 1024,
+      "ssl_verify": true
+    },
+    "chunking": {
+      "chunk_size": 512,
+      "overlap": 50
+    },
+    "search": {
+      "top_k": 5,
+      "similarity_threshold": 0.5
+    },
+    "vector_store_path": "./data/vector_store_text_embedding"
+  },
+  "production": {
+    "embedding_model": {
+      "provider": "openai",
+      "model_name": "bge",
+      "api_key": "your_production_api_key_here",
+      "endpoint": "https://ai-llm.nucc.com/v1",
+      "dimension": 1024,
+      "ssl_verify": false
+    },
+    "rerank_model": {
+      "provider": "openai",
+      "model_name": "bge-reranker-large",
+      "api_key": "your_production_api_key_here",
+      "endpoint": "https://ai-llm.nucc.com/v1",
+      "dimension": 1024,
+      "ssl_verify": false
+    },
+    "chunking": {
+      "chunk_size": 512,
+      "overlap": 50
+    },
+    "search": {
+      "top_k": 5,
+      "similarity_threshold": 0.5
+    },
+    "vector_store_path": "./data/vector_store_text_embedding"
+  },
+  "default_env": "development",
+  "current_env": "development"
+}

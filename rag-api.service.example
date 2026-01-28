@@ -6,7 +6,8 @@ After=network.target
 Type=simple
 User=your_username
 WorkingDirectory=/home/your_username/audit-rag
-ExecStart=/usr/bin/python3 /home/your_username/audit-rag/api_server.py --host 0.0.0.0 --port 8000
+Environment=ENVIRONMENT=production
+ExecStart=/usr/bin/python3 /home/your_username/audit-rag/api_server.py --host 0.0.0.0 --port 8000 --env production
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -6,15 +6,63 @@ RAG系统 - 支持独立存储和搜索功能
 import logging
 import sys
 import argparse
+import os
 from typing import List, Dict, Any
 import json
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+def get_logger():
+    """获取日志记录器，根据环境动态配置日志文件路径"""
+    import logging
+    import os
+    
+    # 根据环境决定日志文件位置
+    env = os.getenv('ENVIRONMENT', 'development')
+    if env == 'production':
+        log_file = '/data/appLogs/api_server.log'
+    else:
+        log_file = './logs/api_server.log'
+
+    # 创建日志目录（如果不存在）
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except OSError:
+            # 如果生产环境路径不可写，降级到本地路径
+            if env == 'production':
+                log_file = './logs/api_server.log'
+                log_dir = os.path.dirname(log_file)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+
+    # 配置日志处理器
+    try:
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    except OSError:
+        # 如果无法创建日志文件，只使用控制台处理器
+        file_handler = None
+
+    console_handler = logging.StreamHandler()
+
+    # 设置日志格式
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    if file_handler:
+        file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # 配置logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    if file_handler:
+        logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+# 初始化日志记录器
+logger = get_logger()
 
 import sys
-import os
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
@@ -27,18 +75,27 @@ def create_embedding_provider(config: dict) -> TextEmbeddingProvider:
     """根据配置创建嵌入提供者"""
     logger.info("创建Text Embedding提供者...")
     
+    # 直接使用从配置文件加载的配置
     embedding_config = config['embedding_model']
+    
+    # 获取环境信息
+    env = config.get('environment', 'development')
+    logger.info(f"当前运行环境: {env}")
+    
     api_key = embedding_config['api_key']
     endpoint = embedding_config['endpoint']
     model_name = embedding_config['model_name']
+    ssl_verify = embedding_config.get('ssl_verify', True)
     
     provider = TextEmbeddingProvider(
         api_key=api_key,
         endpoint=endpoint,
-        model_name=model_name
+        model_name=model_name,
+        ssl_verify=ssl_verify,
+        env=env
     )
     
-    logger.info(f"Text Embedding提供者创建完成，模型: {model_name}")
+    logger.info(f"Text Embedding提供者创建完成，模型: {model_name}, 环境: {env}")
     return provider
 
 

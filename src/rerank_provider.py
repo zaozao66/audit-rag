@@ -31,94 +31,136 @@ class AliyunRerankProvider(RerankProvider):
     使用阿里云DashScope的rerank模型
     """
     
-    def __init__(self, api_key: str, model_name: str = "gte-rerank", endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-retrieve-rerank"):
+    def __init__(self, api_key: str, model_name: str = "gte-rerank", endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-retrieve-rerank", ssl_verify: bool = True, env: str = "development"):
         """
         初始化阿里云重排序提供者
         :param api_key: API密钥
         :param model_name: 模型名称
         :param endpoint: API端点
+        :param ssl_verify: 是否验证SSL证书
+        :param env: 环境（development/production）
         """
+        self.ssl_verify = ssl_verify
+        self.endpoint = endpoint  # 保存完整的端点URL
+        self.env = env  # 保存环境信息
         # 使用OpenAI客户端用于统一的认证管理
+        import httpx
+        http_client = httpx.Client(verify=ssl_verify)
+        
+        # 直接使用提供的endpoint作为base_url
+        base_url = endpoint
+        
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com"  # 使用基本URL
+            base_url=base_url,  # 直接使用提供的端点作为base_url
+            http_client=http_client
         )
         self.model_name = model_name
         self.endpoint = endpoint  # 使用具体的端点URL
-        logger.info(f"阿里云重排序提供者初始化完成，模型名称: {self.model_name}")
+        logger.info(f"阿里云重排序提供者初始化完成，模型名称: {self.model_name}, 环境: {self.env}")
+    
+    def set_ssl_verify(self, ssl_verify: bool):
+        """设置SSL验证状态"""
+        if self.ssl_verify != ssl_verify:
+            # 保存环境信息
+            env = self.env
+            
+            # 关闭现有的HTTP客户端
+            if hasattr(self.client, '_client') and hasattr(self.client._client, 'close'):
+                self.client._client.close()
+            
+            # 创建新的HTTP客户端
+            import httpx
+            http_client = httpx.Client(verify=ssl_verify)
+            
+            # 直接使用提供的endpoint作为base_url
+            base_url = self.endpoint
+            
+            # 重新创建OpenAI客户端
+            self.client = OpenAI(
+                api_key=self.client.api_key,
+                base_url=base_url,
+                http_client=http_client
+            )
+            
+            # 恢复环境信息
+            self.env = env
+            
+            self.ssl_verify = ssl_verify
+            logger.info(f"重排序提供者的SSL验证已设置为: {ssl_verify}")
     
     def rerank(self, query: str, documents: List[str], top_k: int = 10) -> List[Dict[str, Any]]:
         """
-        使用阿里云API进行重排序
+        使用OpenAI兼容API进行重排序
         :param query: 查询文本
         :param documents: 待重排序的文档列表
         :param top_k: 返回前k个结果
         :return: 重排序后的结果列表
         """
+        # 记录调用参数
+        logger.info(f"调用重排序模型API，参数详情:")
+        logger.info(f"  查询文本: {query}")
+        logger.info(f"  待排序文档数量: {len(documents)}")
+        logger.info(f"  Top-K: {top_k}")
+        logger.info(f"  模型名称: {self.model_name}")
+        logger.info(f"  基础URL: {self.client.base_url}")
+        logger.info(f"  前两个文档预览: {[doc[:100] + '...' if len(doc) > 100 else doc for doc in documents[:2]]}")
+        
         try:
-            # 使用标准的阿里云API格式进行重排序
-            import httpx
+            # 使用OpenAI SDK进行重排序
             import json
             
-            headers = {
-                "Authorization": f"Bearer {self.client.api_key}",
-                "Content-Type": "application/json"
-            }
+            # 根据环境确定API路径
+            api_path = "/reranks" if self.env == "development" else "/rerank"
             
-            # 使用阿里云标准格式的请求体
+            # 打印将要发送的请求的URL、Headers和Body内容
+            base_url_str = str(self.client.base_url).rstrip('/')  # 移除末尾的斜杠
+            actual_endpoint = f"{base_url_str}{api_path}"  # 标准OpenAI重排序端点
+            logger.info(f"重排序模型API请求详情:")
+            logger.info(f"  URL: {actual_endpoint}")
+            logger.info(f"  Method: POST")
+            logger.info(f"  Headers: {{'Authorization': 'Bearer ***', 'Content-Type': 'application/json'}}")
+            logger.info(f"  Request Body: {{'model': '{self.model_name}', 'query': '{query}', 'documents': [...], 'top_n': {top_k}}}")
+            
+            # 使用标准的OpenAI兼容格式进行重排序
+            import httpx
+            
+            # 构建请求体
             payload = {
                 "model": self.model_name,
-                "input": {
-                    "query": query,
-                    "documents": [doc for doc in documents]
-                },
-                "parameters": {
-                    "top_n": top_k
-                }
+                "query": query,
+                "documents": documents,
+                "top_n": top_k
             }
             
-            # 打印调用参数用于调试
-            logger.info(f"重排序API调用参数:")
-            logger.info(f"  端点: {self.endpoint}")
-            logger.info(f"  Headers: {dict(headers)}")  # 不打印API密钥
-            logger.info(f"  Payload: {payload}")
-            
-            # 发送请求到指定的端点
-            with httpx.Client(timeout=30.0) as client:
+            # 发送请求到重排序端点，确保URL正确拼接，避免双斜杠
+            base_url_str = str(self.client.base_url).rstrip('/')  # 移除末尾的斜杠
+            with httpx.Client(timeout=30.0, verify=self.ssl_verify) as client:
                 response = client.post(
-                    self.endpoint,
-                    headers=headers,
+                    f"{base_url_str}{api_path}",  # 使用完整的重排序端点，根据环境选择路径
+                    headers={
+                        "Authorization": f"Bearer {self.client.api_key}",
+                        "Content-Type": "application/json"
+                    },
                     json=payload
                 )
                 
-                logger.info(f"第一次API调用响应: {response.status_code}, 内容: {response.text}")
-                
-                # 如果返回400错误且包含'task can not be null'，尝试添加task参数
-                if response.status_code == 400 and "task can not be null" in response.text:
-                    logger.info("检测到task参数缺失，尝试添加task参数")
-                    payload_with_task = payload.copy()
-                    payload_with_task["task"] = "text-retrieve-rerank"
-                    
-                    logger.info(f"添加task参数后的Payload: {payload_with_task}")
-                    
-                    response = client.post(
-                        self.endpoint,
-                        headers=headers,
-                        json=payload_with_task
-                    )
-                    
-                    logger.info(f"第二次API调用响应: {response.status_code}, 内容: {response.text}")
+                logger.info(f"重排序API调用响应: {response.status_code}")
                 
                 if response.status_code != 200:
                     logger.error(f"重排序请求失败: {response.status_code}, {response.text}")
                     raise Exception(f"重排序请求失败: {response.status_code}")
                 
                 result = response.json()
-                
+                logger.info(f"重排序API调用成功，响应状态: 成功")
+            
+            # 记录完整的响应内容
+            logger.info(f"重排序API响应数据: {json.dumps(result, ensure_ascii=False, indent=2)}")
+            
             # 提取重排序结果
             reranked_results = []
-            if 'output' in result and 'results' in result['output']:
-                for item in result['output']['results']:
+            if 'results' in result:
+                for i, item in enumerate(result['results']):
                     index = item.get('index', 0)
                     relevance_score = item.get('relevance_score', 0.0)
                     
@@ -127,6 +169,8 @@ class AliyunRerankProvider(RerankProvider):
                         "document": documents[index] if index < len(documents) else "",
                         "relevance_score": relevance_score
                     })
+                    
+                    logger.info(f"  结果 {i+1}: 索引={index}, 相关性分数={relevance_score:.4f}")
             else:
                 logger.warning("响应中未找到预期的重排序结果，使用默认排序")
                 # 如果API返回格式不符合预期，使用默认排序
@@ -162,6 +206,20 @@ class MockRerankProvider(RerankProvider):
         """
         import random
         
+        # 记录调用参数
+        logger.info(f"调用模拟重排序模型，参数详情:")
+        logger.info(f"  查询文本: {query}")
+        logger.info(f"  待排序文档数量: {len(documents)}")
+        logger.info(f"  Top-K: {top_k}")
+        logger.info(f"  前两个文档预览: {[doc[:100] + '...' if len(doc) > 100 else doc for doc in documents[:2]]}")
+        
+        # 打印模拟请求的URL、Headers和Body内容
+        logger.info(f"模拟重排序模型API请求详情:")
+        logger.info(f"  URL: mock://rerank-provider/rerank")
+        logger.info(f"  Method: MOCK")
+        logger.info(f"  Headers: {{'Content-Type': 'application/json', 'X-Mock-Provider': 'True'}}")
+        logger.info(f"  Request Body: {{'query': '{query}', 'documents': {documents[:2]}{'...' if len(documents) > 2 else ''}, 'top_k': {top_k}}}")
+        
         logger.info(f"执行模拟重排序，文档数量: {len(documents)}, top_k: {top_k}")
         
         # 创建结果列表，包含索引和相关性分数
@@ -184,6 +242,11 @@ class MockRerankProvider(RerankProvider):
         
         # 按相关性分数降序排序
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
+        
+        # 记录返回内容
+        logger.info(f"模拟重排序API响应数据: 总计结果数={len(results)}")
+        for j, result in enumerate(results):
+            logger.info(f"  结果 {j+1}: 索引={result['index']}, 相关性分数={result['relevance_score']:.4f}")
         
         logger.info(f"模拟重排序完成，返回 {len(results)} 个结果")
         return results
