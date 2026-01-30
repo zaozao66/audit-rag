@@ -4,7 +4,7 @@
       "provider": "openai",
       "model_name": "text-embedding-v4",
       "api_key": "your_development_api_key_here",
-      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "endpoint": "https://your-embedding-provider.com/v1",
       "dimension": 1024,
       "ssl_verify": true
     },
@@ -12,7 +12,7 @@
       "provider": "aliyun",
       "model_name": "qwen3-rerank",
       "api_key": "your_development_api_key_here",
-      "endpoint": "https://dashscope.aliyuncs.com/compatible-api/v1",
+      "endpoint": "https://your-rerank-provider.com/v1",
       "dimension": 1024,
       "ssl_verify": true
     },
@@ -31,7 +31,7 @@
       "provider": "openai",
       "model_name": "bge",
       "api_key": "your_production_api_key_here",
-      "endpoint": "https://ai-llm.nucc.com/v1",
+      "endpoint": "https://your-production-embedding.com/v1",
       "dimension": 1024,
       "ssl_verify": false
     },
@@ -39,7 +39,7 @@
       "provider": "openai",
       "model_name": "bge-reranker-large",
       "api_key": "your_production_api_key_here",
-      "endpoint": "https://ai-llm.nucc.com/v1",
+      "endpoint": "https://your-production-rerank.com/v1",
       "dimension": 1024,
       "ssl_verify": false
     },
