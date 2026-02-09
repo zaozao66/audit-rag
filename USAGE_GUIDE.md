@@ -141,15 +141,23 @@ python main.py clear --store-path ./my_custom_store
 
 #### API端点
 
+**系统管理**
 - `GET  /health` - 健康检查
+- `GET  /info` - 获取系统信息（包括当前分块器类型、模型等）
+
+**文档管理**
 - `POST /store` - 存储文档(JSON格式)
 - `POST /upload_store` - 上传并存储文档(文件上传)
+- `POST /clear` - 清空向量库
+
+**测试工具**
 - `POST /chunk_test` - 测试文档分块功能(文本输入)
 - `POST /chunk_test_upload` - 测试文档分块功能(文件上传)
+
+**智能问答**
 - `POST /search_with_intent` - (推荐) 意图识别智能搜索
 - `POST /ask` - 意图驱动LLM问答
-- `POST /clear` - 清空向量库
-- `GET  /info` - 获取系统信息（包括当前分块器类型、模型等）
+- `POST /v1/chat/completions` - OpenAI兼容问答接口（支持流式/非流式）
 
 #### 存储文档API
 
@@ -300,6 +308,87 @@ curl -X POST http://localhost:8000/ask \
 ```
 
 **注意**：使用LLM问答功能前，需要在 `config.json` 中配置LLM API密钥。
+
+#### OpenAI兼容问答API（推荐用于前端集成）
+
+系统提供完全兼容 OpenAI Chat Completions API 的接口，支持流式和非流式两种响应模式：
+
+**非流式请求示例：**
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "请介绍一下个人信息保护法的主要内容"}
+    ],
+    "stream": false,
+    "top_k": 5
+  }'
+```
+
+**流式请求示例：**
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -N \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "审计法的适用范围是什么？"}
+    ],
+    "stream": true,
+    "top_k": 5
+  }'
+```
+
+**请求参数说明：**
+- `messages`: (必需) 消息列表，格式为 `[{"role": "user", "content": "问题"}]`
+  - 支持多轮对话，系统会自动提取最后一条用户消息
+- `stream`: (可选) 是否使用流式响应，默认为 `false`
+- `top_k`: (可选) 检索文档数量，默认为 5
+
+**非流式响应格式：**
+
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "content": "这是助手的回复内容"
+    },
+    "finish_reason": "stop",
+    "index": 0
+  }],
+  "model": "deepseek-chat",
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 80,
+    "total_tokens": 200
+  },
+  "intent": "regulation_query"
+}
+```
+
+**流式响应格式（SSE）：**
+
+```
+data: {"choices":[{"delta":{"content":"这"},"index":0,"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"content":"是助手"},"index":0,"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"content":"的回复"},"index":0,"finish_reason":null}]}
+
+data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+
+data: [DONE]
+```
+
+**核心特性：**
+- ✅ 完全兼容 OpenAI API 格式，便于前端直接对接
+- ✅ 自动意图识别和路由
+- ✅ 支持流式输出，提升用户体验
+- ✅ 集成重排序和智能检索能力
 
 #### 配置LLM
 
