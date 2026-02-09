@@ -97,6 +97,26 @@ class AliyunRerankProvider(RerankProvider):
         :param top_k: 返回前k个结果
         :return: 重排序后的结果列表
         """
+        if not documents:
+            return []
+
+        # 预处理：限制文档数量和长度，防止API 400错误
+        # 阿里云 gte-rerank 限制单次请求文档数，通常为 10
+        MAX_DOCS = 10
+        if len(documents) > MAX_DOCS:
+            logger.warning(f"待重排文档数量({len(documents)})超过限制({MAX_DOCS})，进行截断")
+            documents = documents[:MAX_DOCS]
+        
+        # 限制单个文档长度，防止总请求体过大
+        MAX_DOC_LEN = 1000
+        processed_docs = []
+        for doc in documents:
+            if len(doc) > MAX_DOC_LEN:
+                processed_docs.append(doc[:MAX_DOC_LEN] + "...")
+            else:
+                processed_docs.append(doc)
+        documents = processed_docs
+
         # 记录调用参数
         logger.info(f"调用重排序模型API，参数详情:")
         logger.info(f"  查询文本: {query}")
@@ -186,67 +206,7 @@ class AliyunRerankProvider(RerankProvider):
             
         except Exception as e:
             logger.error(f"重排序过程中发生错误: {e}")
-            # 发生错误时使用模拟重排序作为备用方案
-            logger.info("切换到模拟重排序提供者作为备用方案")
-            mock_provider = MockRerankProvider()
-            return mock_provider.rerank(query, documents, top_k)
+            # 实现 fail-fast 行为，直接抛出异常
+            raise
 
 
-class MockRerankProvider(RerankProvider):
-    """
-    模拟重排序提供者 - 用于测试目的
-    """
-    
-    def __init__(self):
-        logger.info("模拟重排序提供者初始化完成")
-    
-    def rerank(self, query: str, documents: List[str], top_k: int = 10) -> List[Dict[str, Any]]:
-        """
-        模拟重排序功能
-        """
-        import random
-        
-        # 记录调用参数
-        logger.info(f"调用模拟重排序模型，参数详情:")
-        logger.info(f"  查询文本: {query}")
-        logger.info(f"  待排序文档数量: {len(documents)}")
-        logger.info(f"  Top-K: {top_k}")
-        logger.info(f"  前两个文档预览: {[doc[:100] + '...' if len(doc) > 100 else doc for doc in documents[:2]]}")
-        
-        # 打印模拟请求的URL、Headers和Body内容
-        logger.info(f"模拟重排序模型API请求详情:")
-        logger.info(f"  URL: mock://rerank-provider/rerank")
-        logger.info(f"  Method: MOCK")
-        logger.info(f"  Headers: {{'Content-Type': 'application/json', 'X-Mock-Provider': 'True'}}")
-        logger.info(f"  Request Body: {{'query': '{query}', 'documents': {documents[:2]}{'...' if len(documents) > 2 else ''}, 'top_k': {top_k}}}")
-        
-        logger.info(f"执行模拟重排序，文档数量: {len(documents)}, top_k: {top_k}")
-        
-        # 创建结果列表，包含索引和相关性分数
-        results = []
-        for i, doc in enumerate(documents[:top_k]):
-            # 基于文档内容和查询的相关性生成模拟分数
-            score = random.uniform(0.1, 1.0)
-            # 简单的相关性检查：如果文档包含查询中的词，则提高分数
-            query_words = query.lower().split()
-            doc_lower = doc.lower()
-            for word in query_words:
-                if word in doc_lower:
-                    score = min(score + 0.1, 1.0)
-            
-            results.append({
-                "index": i,
-                "document": doc,
-                "relevance_score": round(score, 4)
-            })
-        
-        # 按相关性分数降序排序
-        results.sort(key=lambda x: x["relevance_score"], reverse=True)
-        
-        # 记录返回内容
-        logger.info(f"模拟重排序API响应数据: 总计结果数={len(results)}")
-        for j, result in enumerate(results):
-            logger.info(f"  结果 {j+1}: 索引={result['index']}, 相关性分数={result['relevance_score']:.4f}")
-        
-        logger.info(f"模拟重排序完成，返回 {len(results)} 个结果")
-        return results

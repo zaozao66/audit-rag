@@ -16,7 +16,9 @@ RAG系统现在支持通过HTTP接口直接上传文件进行处理和存储。�
 
 | 参数名 | 类型 | 必需 | 默认值 | 描述 |
 |--------|------|------|--------|------|
-| files | File[] | 是 | - | 要上传的一个或多个文件 |
+| files | File[] | 是 | - | 要上传的一个或多个文件（支持中文名） |
+| chunker_type | String | 否 | "smart" | 分块器类型：smart, law, audit, default |
+| doc_type | String | 否 | "internal_regulation" | 文档类型：internal_regulation, external_regulation, internal_report, external_report |
 | save_after_processing | String | 否 | "true" | 处理后是否自动保存向量库 |
 | store_path | String | 否 | - | 自定义向量库存储路径 |
 
@@ -29,7 +31,8 @@ RAG系统现在支持通过HTTP接口直接上传文件进行处理和存储。�
   "success": true,
   "message": "成功处理了 2 个文件，生成了 5 个文本块",
   "file_count": 2,
-  "processed_count": 5
+  "processed_count": 5,
+  "chunker_used": "smart"
 }
 ```
 
@@ -45,22 +48,21 @@ RAG系统现在支持通过HTTP接口直接上传文件进行处理和存储。�
 
 ### cURL 示例
 
-上传单个文件：
+上传审计报告：
 
 ```bash
 curl -X POST http://localhost:8000/upload_store \
-  -F "files=@/path/to/document.pdf" \
-  -F "save_after_processing=true"
+  -F "files=@/path/to/审计报告.docx" \
+  -F "chunker_type=audit" \
+  -F "doc_type=external_report"
 ```
 
-上传多个文件：
+上传法规制度：
 
 ```bash
 curl -X POST http://localhost:8000/upload_store \
-  -F "files=@/path/to/document1.pdf" \
-  -F "files=@/path/to/document2.docx" \
-  -F "files=@/path/to/document3.txt" \
-  -F "store_path=./my_custom_store"
+  -F "files=@/path/to/管理办法.pdf" \
+  -F "chunker_type=law"
 ```
 
 ### Python 示例

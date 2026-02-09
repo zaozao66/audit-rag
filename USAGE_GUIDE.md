@@ -29,10 +29,48 @@ audit-rag/
 ## 功能特性
 
 1. **文档存储**：将文档内容转换为向量并存储到向量数据库
-2. **文档搜索**：通过语义相似性搜索相关文档片段
-3. **多文件支持**：支持同时处理多个文档
-4. **持久化存储**：向量库可保存和加载，支持跨会话使用
-5. **HTTP API接口**：支持通过HTTP请求进行存储、搜索和清除操作
+2. **意图驱动搜索**：利用LLM识别用户查询意图（如制度查询、报告分析等），自动优化搜索参数
+3. **重排序搜索**：使用 rerank 模型对搜索结果进行精准排序，支持针对不同意图的动态重排策略
+4. **LLM问答**：基于意图识别和检索结果，使用大模型生成具备可追溯性的智能回答
+5. **多文件支持**：支持同时处理多个文档，支持中文文件名保留
+6. **持久化存储**：向量库自动加载与追加，支持跨会话增量存储
+7. **HTTP API接口**：提供现代化的RESTful API，支持智能搜索与问答
+8. **智能分块**：根据文档类型自动选择合适的分块策略
+   - 法规制度：按章、节、条结构分块
+   - 审计报告：按报告层级结构（一、（一）、1.）分块
+   - 普通文档：按段落和语义边界分块
+9. **文档类型管理**：支持标记文档类型（内部制度、外部制度、内部报告、外部报告）并按类型过滤检索
+
+## 文档类型说明
+
+系统支持以下四种文档类型，并为每种类型提供智能分块策略：
+
+### 1. 内部制度 (`internal_regulation`)
+- 企业内部的规章制度、管理办法、操作规程等
+- 使用法规文档分块器，按照"第X章"、"第X节"、"第X条"等结构进行分块
+- 保持条款的完整性和逻辑连贯性
+
+### 2. 外部制度 (`external_regulation`)
+- 国家法律法规、行业标准、监管要求等外部规范性文件
+- 同内部制度，使用法规文档分块器
+- 适合处理《中华人民共和国XX法》、《XX管理办法》等文档
+
+### 3. 内部报告 (`internal_report`)
+- 企业内部的审计报告、检查报告、评估报告等
+- 使用审计报告分块器，按照"一、二、三、..."和"（一）（二）..."层级结构分块
+- 保持报告章节的完整性
+
+### 4. 外部报告 (`external_report`)
+- 审计署报告、监管机构检查报告等外部报告
+- 同内部报告，使用审计报告分块器
+- 特别适合处理政府审计报告、行业检查报告等结构化文档
+
+### 5. 审计问题 (`audit_issue`)
+- 专门用于处理“审计发现问题整改情况表”等表格类文档
+- 使用审计问题分块器，识别表格中的每一行记录（序号+问题摘要+整改情况）作为一个独立的检索单元
+- 适合处理历史问题台账、外部审计整改通报等文档
+
+**智能识别**：即使不指定文档类型，系统也会根据文档内容自动识别并选择合适的分块策略。
 
 ## 使用方法
 
@@ -43,14 +81,17 @@ audit-rag/
 将文档存储到向量库：
 
 ```bash
-python main.py store --files /path/to/doc1.pdf /path/to/doc2.docx /path/to/doc3.txt
+python main.py store --files /path/to/doc1.pdf /path/to/doc2.docx --chunker-type smart
 ```
 
-指定自定义向量库存储路径：
-
-```bash
-python main.py store --files /path/to/doc1.pdf --store-path ./my_custom_store
-```
+参数说明：
+- `--files`: 文件路径列表
+- `--chunker-type`: 分块器类型，可选：
+  - `default`: 普通分块逻辑
+  - `regulation`: 制度文件分块逻辑（适用于法规、内部制度等）
+  - `audit_report`: 审计报告分块逻辑（适用于各类审计报告）
+  - `smart`: (推荐) 智能识别文档类型并选择最优逻辑
+- `--store-path`: 自定义向量库存储路径
 
 #### 搜索文档
 
@@ -105,10 +146,10 @@ python main.py clear --store-path ./my_custom_store
 - `POST /upload_store` - 上传并存储文档(文件上传)
 - `POST /chunk_test` - 测试文档分块功能(文本输入)
 - `POST /chunk_test_upload` - 测试文档分块功能(文件上传)
-- `POST /search` - 搜索文档
-- `POST /search_rerank` - 搜索文档并重排序
+- `POST /search_with_intent` - (推荐) 意图识别智能搜索
+- `POST /ask` - 意图驱动LLM问答
 - `POST /clear` - 清空向量库
-- `GET  /info` - 系统信息
+- `GET  /info` - 获取系统信息（包括当前分块器类型、模型等）
 
 #### 存储文档API
 
@@ -123,32 +164,38 @@ curl -X POST http://localhost:8000/store \
         "text": "这里是文档的文本内容...",
         "source": "example_source"
       }
-    ]
+    ],
+    "chunker_type": "smart"
   }'
 ```
 
-#### 上传并存储文档API (新功能)
+#### 上传并存储文档API (支持多文件与中文名)
 
-支持直接上传文件进行存储，支持PDF、DOCX、TXT等格式：
+支持直接上传文件进行存储，支持PDF、DOCX、TXT等格式，且完整保留中文文件名：
 
 ```bash
 curl -X POST http://localhost:8000/upload_store \
-  -F "files=@/path/to/document1.pdf" \
-  -F "files=@/path/to/document2.docx" \
-  -F "files=@/path/to/document3.txt" \
-  -F "save_after_processing=true" \
-  -F "store_path=./custom_vector_store"
+  -F "files=@/path/to/审计报告2024.pdf" \
+  -F "files=@/path/to/管理制度.docx" \
+  -F "chunker_type=smart" \
+  -F "doc_type=external_report" \
+  -F "save_after_processing=true"
 ```
 
 参数说明：
-- `files`: 要上传的一个或多个文件
+- `files`: 要上传的一个或多个文件（支持中文名）
+- `chunker_type`: (可选) 分块器类型：
+  - `smart`: (推荐) 智能识别文档内容并选择最优策略
+  - `regulation`: 制度模式（处理法规、内部规章、章/节/条结构）
+  - `audit_report`: 审计报告模式（处理专项审计报告、一/（一）/1.层级）
+  - `audit_issue`: 审计问题模式（处理整改情况表、表格行结构）
+  - `default`: 普通段落分块
+- `doc_type`: (可选) 文档类型标记（用于过滤）：internal_regulation, external_regulation, internal_report, external_report, audit_issue
 - `save_after_processing`: (可选) 处理后是否自动保存，默认为true
 - `store_path`: (可选) 自定义向量库存储路径
-- `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
-  - 法规分块器会智能识别法规文档的层级结构，将子条款（如（一）、（二）、（三）等）与上级条款合并，而不是单独切分
 
 
-#### 测试文档分块API
+#### 测试文档分块API (文本测试)
 
 用于测试分块效果，不实际存储到向量库：
 
@@ -157,8 +204,7 @@ curl -X POST http://localhost:8000/chunk_test \
   -H "Content-Type: application/json" \
   -d '{
     "text": "这里是需要分块的文档内容...",
-    "filename": "test_doc.txt",
-    "use_law_chunker": true,
+    "chunker_type": "law",
     "chunk_size": 512,
     "overlap": 50
   }'
@@ -166,65 +212,133 @@ curl -X POST http://localhost:8000/chunk_test \
 
 参数说明：
 - `text`: (必需) 要分块的文档文本内容
-- `filename`: (可选) 文件名，默认为 "test_document.txt"
-- `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
-  - 法规分块器会智能识别法规文档的层级结构，将子条款（如（一）、（二）、（三）等）与上级条款合并，而不是单独切分
+- `chunker_type`: (可选) 分块器类型（见上文），默认为 `smart`
+  - `regulation`: 制度文件模式
+  - `audit_report`: 审计报告模式
+  - `default`: 普通分块模式
 - `chunk_size`: (可选) 分块大小，默认为512
 - `overlap`: (可选) 块间重叠大小，默认为50
 
 返回结果包含分块的数量、每个块的预览以及分块详情.
 
 
-#### 上传文件测试文档分块API
+#### 上传文件测试文档分块API (文件测试)
 
 用于上传文件并测试分块效果，不实际存储到向量库：
 
 ```bash
 curl -X POST http://localhost:8000/chunk_test_upload \
-  -F "file=@/path/to/document.pdf" \
-  -F "use_law_chunker=true" \
-  -F "chunk_size=512" \
-  -F "overlap=50"
+  -F "file=@/path/to/审计报告.docx" \
+  -F "chunker_type=audit" \
+  -F "chunk_size=1024"
 ```
 
-参数说明：
-- `file`: (必需) 要上传的文件（支持PDF、DOCX、TXT格式）
-- `use_law_chunker`: (可选) 是否使用法规文档分块器，默认为false
-  - 法规分块器会智能识别法规文档的层级结构，将子条款（如（一）、（二）、（三）等）与上级条款合并，而不是单独切分
-- `chunk_size`: (可选) 分块大小，默认为512
-- `overlap`: (可选) 块间重叠大小，默认为50
+参数说明与 `upload_store` 一致。
 
 返回结果包含文件信息、分块的数量、每个块的预览以及分块详情.
 
-#### 搜索文档API
+#### 意图识别智能搜索API (推荐)
+
+系统会自动通过LLM识别您的查询意图，并动态调整检索范围（库筛选）和检索深度（top_k）：
 
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:8000/search_with_intent \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "搜索关键词",
-    "top_k": 5
+    "query": "基于审计报告，分析公司目前面临的TOP3风险"
   }'
 ```
 
-#### 带重排序的搜索文档API
+**意图分类逻辑：**
+- `regulation_query`: 侧重搜索制度库，检索深度适中
+- `audit_query`: 侧重搜索审计报告库，检索深度适中
+- `audit_analysis`: 针对分析类问题，自动将 `top_k` 提升至 20+，以获取更广的上下文覆盖
+- `comprehensive_query`: 跨库全面检索
 
-使用阿里云重排序模型对搜索结果进行二次排序，提升相关性：
+返回结果中将包含 `intent`（意图类型）和 `suggested_top_k`（自动推荐的检索深度）。
+
+#### LLM问答API
+
+使用大模型基于意图识别和检索结果生成智能回答：
 
 ```bash
-curl -X POST http://localhost:8000/search_rerank \
+curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "搜索关键词",
-    "top_k": 5,
-    "rerank_top_k": 10
+    "query": "采购管理有哪些问题？"
   }'
 ```
+
+**特性说明：**
+- **自动路由**：系统会自动判断问题属于制度还是审计报告，并动态决定 `top_k`。
+- **可追溯性**：回答中的引用部分会直接显示**来源文件名**，而非序号。
+- **安全限制**：针对第三方重排序API（如阿里云）的文档数量（10个）和字符长度限制进行了自动截断处理。
+
+返回结果格式：
+```json
+{
+  "success": true,
+  "query": "采购管理有哪些问题？",
+  "intent": "audit_query",
+  "answer": "基于《2024年采购专项审计报告》，采购管理主要存在以下问题：\n\n1. 采购计划管理不规范...",
+  "search_results": [
+    {
+      "score": 0.95,
+      "text": "相关文档内容...",
+      "doc_type": "internal_report",
+      "title": "2024年采购专项审计报告",
+      "filename": "2024年采购专项审计报告.pdf"
+    }
+  ],
+  "llm_usage": {
+    "prompt_tokens": 1200,
+    "completion_tokens": 300,
+    "total_tokens": 1500
+  },
+  "model": "deepseek-chat"
+}
+```
+
+**注意**：使用LLM问答功能前，需要在 `config.json` 中配置LLM API密钥。
+
+#### 配置LLM
+
+在 `config.json` 中添加或修改 `llm_model` 配置：
+
+```json
+{
+  "development": {
+    "llm_model": {
+      "provider": "deepseek",
+      "model_name": "deepseek-chat",
+      "api_key": "YOUR_DEEPSEEK_API_KEY_HERE",
+      "endpoint": "https://api.deepseek.com/v1",
+      "temperature": 0.7,
+      "max_tokens": 2000,
+      "ssl_verify": true
+    }
+  }
+}
+```
+
+请将 `YOUR_DEEPSEEK_API_KEY_HERE` 替换为你的实际 DeepSeek API 密钥。
 
 参数说明：
 - `query`: (必需) 搜索查询文本
 - `top_k`: (可选) 返回前k个结果，默认为5
 - `rerank_top_k`: (可选) 重排序时考虑的文档数量，默认为10
+- `doc_types`: (可选) 文档类型过滤列表，支持：internal_regulation（内部制度）、external_regulation（外部制度）、internal_report（内部报告）、external_report（外部报告）
+- `titles`: (可选) 标题过滤列表，只返回指定标题的文档
+
+搜索结果格式：
+- `score`: 重排序后的相关性分数
+- `text`: 匹配的文本内容
+- `doc_id`: 文档ID
+- `filename`: 文件名
+- `file_type`: 文件类型
+- `doc_type`: 文档类型
+- `title`: 文档标题
+- `original_score`: (可选) 原始相似度分数（当使用重排序时）
 
 #### 清空向量库API
 

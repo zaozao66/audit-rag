@@ -15,11 +15,14 @@ from werkzeug.utils import secure_filename
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from config_loader import load_config
-from src.embedding_providers import TextEmbeddingProvider
-from src.rag_processor import RAGProcessor, process_user_uploaded_documents
-from src.document_chunker import DocumentChunker
-from src.law_document_chunker import LawDocumentChunker
-from src.rerank_provider import AliyunRerankProvider, MockRerankProvider
+from embedding_providers import TextEmbeddingProvider
+from rag_processor import RAGProcessor, process_user_uploaded_documents, SmartChunker
+from document_chunker import DocumentChunker
+from law_document_chunker import LawDocumentChunker
+from audit_report_chunker import AuditReportChunker
+from audit_issue_chunker import AuditIssueChunker
+from rerank_provider import AliyunRerankProvider
+from llm_provider import create_llm_provider
 
 # 配置日志
 # 根据环境决定日志文件位置
@@ -56,21 +59,31 @@ app = Flask(__name__)
 rag_processor = None
 
 
-def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = False):
+def initialize_rag_processor(chunker_type: str = None, use_rerank: bool = False, use_llm: bool = False):
     """初始化RAG处理器"""
     global rag_processor
     
-    # 如果指定了使用法规分块器，且当前处理器不是法规分块器，则重新初始化
-    # 或者如果重排序设置发生变化
-    if rag_processor is not None and (rag_processor.use_law_chunker != use_law_chunker or 
-                                      (rag_processor.rerank_provider is not None) != use_rerank):
-        rag_processor = None
+    # 如果指定了分块器类型，且当前处理器类型不同，则重新初始化
+    # 或者如果重排序设置不匹配，也重新初始化
+    # 或者如果LLM设置不匹配，也重新初始化
+    current_use_rerank = rag_processor is not None and rag_processor.rerank_provider is not None
+    current_use_llm = rag_processor is not None and rag_processor.llm_provider is not None
+    if rag_processor is not None:
+        type_mismatch = chunker_type is not None and rag_processor.chunker_type != chunker_type
+        rerank_mismatch = current_use_rerank != use_rerank
+        llm_mismatch = current_use_llm != use_llm
+        if type_mismatch or rerank_mismatch or llm_mismatch:
+            rag_processor = None
     
     if rag_processor is None:
         try:
             # 加载配置
             logger.info("加载配置文件...")
             config = load_config()
+            
+            # 确定分块器类型：优先使用传入的，否则使用配置中的
+            if chunker_type is None:
+                chunker_type = config.get('chunking', {}).get('chunker_type', 'smart')
             
             # 获取环境信息
             env = config.get('environment', 'development')
@@ -91,6 +104,20 @@ def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = F
                 ssl_verify=ssl_verify,
                 env=env
             )
+            
+            # 创建LLM提供者
+            llm_provider = None
+            if use_llm:
+                logger.info("创建LLM提供者...")
+                try:
+                    llm_config = config.get('llm_model', {})
+                    if 'api_key' in llm_config and llm_config['api_key'] and llm_config['api_key'] != 'YOUR_DEEPSEEK_API_KEY_HERE':
+                        llm_provider = create_llm_provider(llm_config)
+                    else:
+                        logger.warning("LLM API密钥未配置，LLM功能将被禁用")
+                except Exception as e:
+                    logger.error(f"创建LLM提供者失败: {e}")
+                    raise
             
             # 创建重排序提供者
             rerank_provider = None
@@ -117,15 +144,17 @@ def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = F
                         logger.warning("重排序API密钥未配置，使用模拟重排序提供者")
                         rerank_provider = MockRerankProvider()
                 except Exception as e:
-                    logger.error(f"创建重排序提供者失败: {e}，使用模拟重排序提供者")
-                    rerank_provider = MockRerankProvider()
+                    logger.error(f"创建重排序提供者失败: {e}")
+                    raise  # 实现 fail-fast 行为，直接抛出异常
             
             # 获取配置参数
             chunk_size = config['chunking']['chunk_size']
             overlap = config['chunking']['overlap']
             vector_store_path = config.get('vector_store_path', './data/vector_store_text_embedding')
+            # 默认分块器类型
+            chunker_type = config.get('chunking', {}).get('chunker_type', 'smart')
             
-            logger.info(f"使用配置参数 - 块大小: {chunk_size}, 重叠: {overlap}")
+            logger.info(f"使用配置参数 - 块大小: {chunk_size}, 重叠: {overlap}, 分块器类型: {chunker_type}")
             logger.info(f"向量库存储路径: {vector_store_path}")
             
             # 创建RAG处理器
@@ -134,15 +163,17 @@ def initialize_rag_processor(use_law_chunker: bool = False, use_rerank: bool = F
                 chunk_size=chunk_size,
                 overlap=overlap,
                 vector_store_path=vector_store_path,
-                use_law_chunker=use_law_chunker,
-                rerank_provider=rerank_provider
+                chunker_type=chunker_type,
+                rerank_provider=rerank_provider,
+                llm_provider=llm_provider
             )
             
             logger.info(f"RAG处理器初始化完成，环境: {env}")
-            return rag_processor
         except Exception as e:
             logger.error(f"初始化RAG处理器失败: {e}")
             raise
+    
+    return rag_processor
 
 
 @app.route('/health', methods=['GET'])
@@ -161,22 +192,24 @@ def store_documents():
     try:
         # 获取请求参数
         is_json_request = request.is_json
-        use_law_chunker = False
+        chunker_type = 'smart'
         
         if is_json_request:
             data = request.get_json()
-            use_law_chunker = data.get('use_law_chunker', False)
+            chunker_type = data.get('chunker_type') or data.get('chunker-type') or 'smart'
+            if chunker_type == 'law': chunker_type = 'regulation'
+            if chunker_type == 'audit': chunker_type = 'audit_report'
+            if chunker_type == 'issue': chunker_type = 'audit_issue'
         elif request.form:
             # 对于表单请求，从form中获取参数
-            use_law_chunker = request.form.get('use_law_chunker', 'false').lower() == 'true'
-            # 在这种情况下，文档数据通常不会通过表单传递，所以这里主要是为了统一接口
+            chunker_type = request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
+            if chunker_type == 'law': chunker_type = 'regulation'
+            if chunker_type == 'audit': chunker_type = 'audit_report'
+            if chunker_type == 'issue': chunker_type = 'audit_issue'
         
         # 初始化RAG处理器
-        if rag_processor is None:
-            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker)
-        elif rag_processor.use_law_chunker != use_law_chunker:
-            # 如果分块器类型不同，重新初始化
-            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker)
+        if rag_processor is None or (chunker_type != 'smart' and rag_processor.chunker_type != chunker_type):
+            rag_processor = initialize_rag_processor(chunker_type=chunker_type)
         
         # 检查请求数据
         if not is_json_request:
@@ -206,7 +239,7 @@ def store_documents():
             "success": True,
             "message": f"成功处理了 {num_processed} 个文本块",
             "processed_count": num_processed,
-            "chunker_used": "law" if use_law_chunker else "standard"
+            "chunker_used": chunker_type
         })
         
     except Exception as e:
@@ -214,137 +247,90 @@ def store_documents():
         return jsonify({"error": f"存储文档失败: {str(e)}"}), 500
 
 
-@app.route('/search', methods=['POST'])
-def search_documents():
-    """搜索文档接口"""
+def _format_search_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """统一搜索结果格式化逻辑"""
+    formatted = []
+    for res in results:
+        doc = res['document']
+        entry = {
+            "score": res['score'],
+            "text": doc['text'],
+            "doc_id": doc.get('doc_id', ''),
+            "filename": doc.get('filename', ''),
+            "file_type": doc.get('file_type', ''),
+            "doc_type": doc.get('doc_type', ''),
+            "title": doc.get('title', '')
+        }
+        if 'original_score' in res:
+            entry["original_score"] = res['original_score']
+        formatted.append(entry)
+    return formatted
+
+
+@app.route('/search_with_intent', methods=['POST'])
+def search_with_intent():
+    """带意图识别的智能搜索接口"""
     global rag_processor
     try:
-        # 初始化RAG处理器
-        if rag_processor is None:
-            rag_processor = initialize_rag_processor()
-        
-        # 检查请求数据
-        if not request.is_json:
-            return jsonify({"error": "请求必须是JSON格式"}), 400
-        
+        rag_processor = initialize_rag_processor(use_rerank=True, use_llm=True)
         data = request.get_json()
+        query = data.get('query')
+        if not query:
+            return jsonify({"error": "缺少query参数"}), 400
         
-        # 检查必需字段
-        if 'query' not in data:
+        result = rag_processor.search_with_intent(query, use_rerank=True)
+        return jsonify({
+            "success": True,
+            "query": query,
+            "intent": result['intent'],
+            "intent_reason": result['intent_reason'],
+            "suggested_top_k": result['suggested_top_k'],
+            "results": _format_search_results(result['search_results'])
+        })
+    except Exception as e:
+        logger.error(f"智能搜索失败: {e}")
+        return jsonify({"error": f"搜索失败: {str(e)}"}), 500
+
+
+@app.route('/ask', methods=['POST'])
+def ask_with_llm():
+    """带LLM回答的问答接口"""
+    global rag_processor
+    try:
+        rag_processor = initialize_rag_processor(use_rerank=True, use_llm=True)
+        data = request.get_json()
+        if not data or 'query' not in data:
             return jsonify({"error": "缺少query字段"}), 400
         
         query = data['query']
         top_k = data.get('top_k', 5)
-        store_path = data.get('store_path')
         
-        if store_path:
-            rag_processor.vector_store_path = store_path
-        
-        # 执行搜索
-        results = rag_processor.search(query, top_k=top_k)
-        
-        # 格式化结果
-        formatted_results = []
-        for result in results:
-            formatted_results.append({
-                "score": result['score'],
-                "text": result['document']['text'],
-                "doc_id": result['document'].get('doc_id', ''),
-                "filename": result['document'].get('filename', ''),
-                "file_type": result['document'].get('file_type', '')
-            })
+        result = rag_processor.search_with_llm_answer(query, top_k=top_k)
         
         return jsonify({
             "success": True,
             "query": query,
-            "results": formatted_results,
-            "count": len(formatted_results)
+            "intent": result.get('intent', 'unknown'),
+            "answer": result['answer'],
+            "search_results": _format_search_results(result['search_results']),
+            "llm_usage": result['llm_usage'],
+            "model": result['model']
         })
+    except Exception as e:
+        logger.error(f"LLM问答出错: {e}")
+        return jsonify({"error": f"问答失败: {str(e)}"}), 500
         
     except ValueError as e:
-        # 特别处理向量库不存在的错误
-        if "向量库不存在" in str(e):
+        if "LLM功能未启用" in str(e):
+            return jsonify({"error": "LLM功能未配置，请在config.json中配置LLM API密钥"}), 503
+        elif "向量库不存在" in str(e):
             return jsonify({"error": "向量库不存在，请先存储文档"}), 404
         else:
-            logger.error(f"搜索文档时出错: {e}")
-            return jsonify({"error": f"搜索文档失败: {str(e)}"}), 500
+            logger.error(f"LLM问答时出错: {e}")
+            return jsonify({"error": f"LLM问答失败: {str(e)}"}), 500
     except Exception as e:
-        logger.error(f"搜索文档时出错: {e}")
-        return jsonify({"error": f"搜索文档失败: {str(e)}"}), 500
-
-
-@app.route('/search_rerank', methods=['POST'])
-def search_documents_with_rerank():
-    """带重排序的搜索文档接口"""
-    global rag_processor
-    try:
-        # 获取请求参数
-        use_rerank = True
-        use_law_chunker = False  # 重排序功能不直接影响分块器的选择，但我们可以根据需要设置
-        
-        # 初始化RAG处理器
-        if rag_processor is None:
-            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker, use_rerank=use_rerank)
-        elif (rag_processor.rerank_provider is None) != (not use_rerank):
-            # 如果重排序设置不匹配，重新初始化
-            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker, use_rerank=use_rerank)
-        
-        # 检查请求数据
-        if not request.is_json:
-            return jsonify({"error": "请求必须是JSON格式"}), 400
-        
-        data = request.get_json()
-        
-        # 检查必需字段
-        if 'query' not in data:
-            return jsonify({"error": "缺少query字段"}), 400
-        
-        query = data['query']
-        top_k = data.get('top_k', 5)
-        rerank_top_k = data.get('rerank_top_k', 10)  # 重排序时考虑的文档数量
-        store_path = data.get('store_path')
-        
-        if store_path:
-            rag_processor.vector_store_path = store_path
-        
-        # 执行带重排序的搜索
-        results = rag_processor.search(query, top_k=top_k, use_rerank=True, rerank_top_k=rerank_top_k)
-        
-        # 格式化结果
-        formatted_results = []
-        for result in results:
-            result_entry = {
-                "score": result['score'],
-                "text": result['document']['text'],
-                "doc_id": result['document'].get('doc_id', ''),
-                "filename": result['document'].get('filename', ''),
-                "file_type": result['document'].get('file_type', '')
-            }
-            
-            # 如果有原始分数，也包含进去
-            if 'original_score' in result:
-                result_entry["original_score"] = result['original_score']
-            
-            formatted_results.append(result_entry)
-        
-        return jsonify({
-            "success": True,
-            "query": query,
-            "results": formatted_results,
-            "count": len(formatted_results),
-            "with_rerank": True
-        })
-        
-    except ValueError as e:
-        # 特别处理向量库不存在的错误
-        if "向量库不存在" in str(e):
-            return jsonify({"error": "向量库不存在，请先存储文档"}), 404
-        else:
-            logger.error(f"搜索文档时出错: {e}")
-            return jsonify({"error": f"搜索文档失败: {str(e)}"}), 500
-    except Exception as e:
-        logger.error(f"搜索文档时出错: {e}")
-        return jsonify({"error": f"搜索文档失败: {str(e)}"}), 500
+        logger.error(f"LLM问答时出错: {e}")
+        return jsonify({"error": f"LLM问答失败: {str(e)}"}), 500
 
 
 @app.route('/clear', methods=['POST'])
@@ -395,15 +381,17 @@ def upload_and_store_documents():
     """上传并存储文档接口 - 支持文件上传"""
     global rag_processor
     try:
-        # 获取请求参数
-        use_law_chunker = request.form.get('use_law_chunker', 'false').lower() == 'true'
+        # 获取参数并进行映射
+        chunker_type = request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
+        
+        # 统一映射：law -> regulation, audit -> audit_report, issue -> audit_issue
+        if chunker_type == 'law': chunker_type = 'regulation'
+        if chunker_type == 'audit': chunker_type = 'audit_report'
+        if chunker_type == 'issue': chunker_type = 'audit_issue'
         
         # 初始化RAG处理器
-        if rag_processor is None:
-            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker)
-        elif rag_processor.use_law_chunker != use_law_chunker:
-            # 如果分块器类型不同，重新初始化
-            rag_processor = initialize_rag_processor(use_law_chunker=use_law_chunker)
+        if rag_processor is None or (chunker_type != 'smart' and rag_processor.chunker_type != chunker_type):
+            rag_processor = initialize_rag_processor(chunker_type=chunker_type)
         
         # 检查是否有文件被上传
         if 'files' not in request.files:
@@ -420,21 +408,35 @@ def upload_and_store_documents():
         if store_path:
             rag_processor.vector_store_path = store_path
         
-        # 临时存储文件路径
+        # 临时存储文件路径和原始文件名
         temp_file_paths = []
+        original_filenames = []
         
         # 保存上传的文件到临时位置
         for file in uploaded_files:
             if file and file.filename:
-                filename = secure_filename(file.filename)
+                # 直接使用原始文件名，保留中文字符
+                # 只替换路径分隔符以防止路径遍历攻击
+                filename = file.filename.replace('/', '_').replace('\\', '_').replace('\0', '')
+                original_filenames.append(filename) # 记录原始文件名
                 # 创建临时文件
                 import tempfile
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
                 file.save(temp_file.name)
                 temp_file_paths.append(temp_file.name)
         
+        # 获取文档类型和标题参数
+        doc_type = request.form.get('doc_type', 'internal_regulation')
+        title = request.form.get('title', None)
+        
         # 使用RAGProcessor处理上传的文件
-        num_processed = rag_processor.process_documents_from_files(temp_file_paths, save_after_processing=save_after_processing)
+        num_processed = rag_processor.process_documents_from_files(
+            temp_file_paths, 
+            save_after_processing=save_after_processing, 
+            doc_type=doc_type, 
+            title=title,
+            original_filenames=original_filenames # 传递原始文件名
+        )
         
         # 删除临时文件
         for temp_path in temp_file_paths:
@@ -448,7 +450,7 @@ def upload_and_store_documents():
             "message": f"成功处理了 {len(uploaded_files)} 个文件，生成了 {num_processed} 个文本块",
             "file_count": len(uploaded_files),
             "processed_count": num_processed,
-            "chunker_used": "law" if use_law_chunker else "standard"
+            "chunker_used": chunker_type
         })
         
     except Exception as e:
@@ -472,7 +474,20 @@ def test_chunking():
         
         text = data['text']
         filename = data.get('filename', 'test_document.txt')
-        use_law_chunker = data.get('use_law_chunker', False)
+        chunker_type = data.get('chunker_type') or data.get('chunker-type') or 'smart'
+        doc_type = data.get('doc_type')
+        
+        # 映射
+        if chunker_type == 'law': chunker_type = 'regulation'
+        if chunker_type == 'audit': chunker_type = 'audit_report'
+        if chunker_type == 'issue': chunker_type = 'audit_issue'
+        
+        if not doc_type:
+            if chunker_type == 'regulation': doc_type = 'internal_regulation'
+            elif chunker_type == 'audit_report': doc_type = 'internal_report'
+            elif chunker_type == 'audit_issue': doc_type = 'audit_issue'
+            else: doc_type = 'internal_regulation'
+            
         chunk_size = data.get('chunk_size', 512)
         overlap = data.get('overlap', 50)
         
@@ -482,12 +497,19 @@ def test_chunking():
             'filename': filename,
             'file_type': 'txt',
             'text': text,
+            'doc_type': doc_type, # 传递 doc_type
             'char_count': len(text)
         }
         
         # 根据参数选择分块器
-        if use_law_chunker:
+        if chunker_type == "regulation" or chunker_type == "law":
             chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == "audit_report" or chunker_type == "audit":
+            chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == "audit_issue" or chunker_type == "issue":
+            chunker = AuditIssueChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == "smart":
+            chunker = SmartChunker(chunk_size=chunk_size, overlap=overlap)
         else:
             chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
         
@@ -499,7 +521,7 @@ def test_chunking():
         for i, chunk in enumerate(chunks):
             formatted_chunks.append({
                 "chunk_id": i + 1,
-                "text": chunk['text'][:200] + "..." if len(chunk['text']) > 200 else chunk['text'],  # 截取前200个字符作为预览
+                "text": chunk['text'],
                 "full_text_length": len(chunk['text']),
                 "semantic_boundary": chunk.get('semantic_boundary', 'content'),
                 "section_path": chunk.get('section_path', []),
@@ -509,7 +531,7 @@ def test_chunking():
         
         return jsonify({
             "success": True,
-            "chunker_used": "law" if use_law_chunker else "standard",
+            "chunker_used": chunker_type,
             "original_text_length": len(text),
             "chunks_count": len(chunks),
             "chunks": formatted_chunks
@@ -533,7 +555,21 @@ def test_chunking_upload():
             return jsonify({"error": "没有选择文件"}), 400
         
         # 获取其他参数
-        use_law_chunker = request.form.get('use_law_chunker', 'false').lower() == 'true'
+        chunker_type = request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
+        doc_type = request.form.get('doc_type')
+        
+        # 统一映射
+        if chunker_type == 'law': chunker_type = 'regulation'
+        if chunker_type == 'audit': chunker_type = 'audit_report'
+        if chunker_type == 'issue': chunker_type = 'audit_issue'
+        
+        # 如果未指定 doc_type，根据 chunker_type 推断
+        if not doc_type:
+            if chunker_type == 'regulation': doc_type = 'internal_regulation'
+            elif chunker_type == 'audit_report': doc_type = 'internal_report'
+            elif chunker_type == 'audit_issue': doc_type = 'audit_issue'
+            else: doc_type = 'internal_regulation'
+            
         chunk_size = int(request.form.get('chunk_size', 512))
         overlap = int(request.form.get('overlap', 50))
         
@@ -547,7 +583,8 @@ def test_chunking_upload():
             # 使用文档处理器读取文件内容
             from src.document_processor import process_uploaded_documents
             file_paths = [temp_file.name]
-            processed_docs = process_uploaded_documents(file_paths)
+            # 传递 doc_type，确保如果是 audit_issue 会调用表格提取逻辑
+            processed_docs = process_uploaded_documents(file_paths, doc_type=doc_type)
             
             if not processed_docs:
                 return jsonify({"error": "无法处理上传的文件"}), 400
@@ -562,13 +599,20 @@ def test_chunking_upload():
                 'doc_id': 'test_doc',
                 'filename': filename,
                 'file_type': doc['file_type'],
+                'doc_type': doc.get('doc_type', doc_type), # 传递 doc_type
                 'text': text,
                 'char_count': len(text)
             }
             
             # 根据参数选择分块器
-            if use_law_chunker:
+            if chunker_type == "regulation" or chunker_type == "law":
                 chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
+            elif chunker_type == "audit_report" or chunker_type == "audit":
+                chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
+            elif chunker_type == "audit_issue" or chunker_type == "issue":
+                chunker = AuditIssueChunker(chunk_size=chunk_size, overlap=overlap)
+            elif chunker_type == "smart":
+                chunker = SmartChunker(chunk_size=chunk_size, overlap=overlap)
             else:
                 chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
             
@@ -580,7 +624,7 @@ def test_chunking_upload():
             for i, chunk in enumerate(chunks):
                 formatted_chunks.append({
                     "chunk_id": i + 1,
-                    "text": chunk['text'][:200] + "..." if len(chunk['text']) > 200 else chunk['text'],  # 截取前200个字符作为预览
+                    "text": chunk['text'],
                     "full_text_length": len(chunk['text']),
                     "semantic_boundary": chunk.get('semantic_boundary', 'content'),
                     "section_path": chunk.get('section_path', []),
@@ -592,7 +636,7 @@ def test_chunking_upload():
                 "success": True,
                 "filename": filename,
                 "file_type": doc['file_type'],
-                "chunker_used": "law" if use_law_chunker else "standard",
+                "chunker_used": chunker_type,
                 "original_text_length": len(text),
                 "chunks_count": len(chunks),
                 "chunks": formatted_chunks
@@ -631,7 +675,10 @@ def get_info():
             "status": "running",
             "vector_store_status": vector_store_status,
             "vector_count": vector_count,
-            "dimension": rag_processor.dimension or 1024
+            "dimension": rag_processor.dimension or 1024,
+            "chunker_type": rag_processor.chunker_type,
+            "embedding_model": rag_processor.embedding_provider.model_name if hasattr(rag_processor.embedding_provider, 'model_name') else 'unknown',
+            "rerank_enabled": rag_processor.rerank_provider is not None
         })
     except Exception as e:
         logger.error(f"获取系统信息时出错: {e}")

@@ -180,6 +180,8 @@ class DocumentChunker:
                     'start_pos': chunk.get('start_pos', 0),
                     'end_pos': chunk.get('end_pos', len(chunk['text'])),
                     'semantic_boundary': chunk.get('semantic_boundary', 'unknown'),
+                    'doc_type': document.get('doc_type', 'internal_regulation'),  # 确保文档类型传递
+                    'title': document.get('title', ''),  # 确保标题传递
                     **metadata  # 合并原始文档的元数据
                 }
                 all_chunks.append(chunk_data)

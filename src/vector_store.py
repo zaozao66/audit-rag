@@ -52,11 +52,13 @@ class VectorStore:
         # 保存文档信息
         self.documents.extend(documents)
     
-    def search(self, query_embedding: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query_embedding: List[float], top_k: int = 5, doc_types: List[str] = None, titles: List[str] = None) -> List[Dict[str, Any]]:
         """
         搜索最相似的向量
         :param query_embedding: 查询向量
         :param top_k: 返回前k个结果
+        :param doc_types: 文档类型过滤列表 (可选)
+        :param titles: 标题过滤列表 (可选)
         :return: 包含相似文档和相似度分数的结果列表
         """
         # 将查询向量转换为numpy数组
@@ -67,20 +69,34 @@ class VectorStore:
             faiss.normalize_L2(query_array)
         
         # 执行Faiss搜索
-        scores, indices = self.index.search(query_array, top_k)
+        scores, indices = self.index.search(query_array, min(top_k * 10, self.index.ntotal))  # 搜索更多结果以进行过滤
         
         results = []
         # 处理搜索结果
-        for i in range(min(len(indices[0]), len(self.documents))):
+        for i in range(len(indices[0])):
             idx = indices[0][i]
             if idx < len(self.documents) and idx != -1:
+                doc = self.documents[idx]
+                
+                # 应用过滤条件
+                if doc_types and doc.get('doc_type') not in doc_types:
+                    continue
+                    
+                if titles and doc.get('title') not in titles:
+                    continue
+                
                 result = {
-                    'document': self.documents[idx],
+                    'document': doc,
                     'score': float(scores[0][i])  # 相似度分数
                 }
                 results.append(result)
+                
+                # 如果已收集到足够的结果，停止搜索
+                if len(results) >= top_k:
+                    break
         
-        return results
+        # 如果结果太多，只返回top_k个
+        return results[:top_k]
     
     def save(self, filepath: str):
         """

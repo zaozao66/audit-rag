@@ -115,7 +115,10 @@ def store_documents(args):
         # 获取配置参数
         chunk_size = config['chunking']['chunk_size']
         overlap = config['chunking']['overlap']
-        logger.info(f"使用配置参数 - 块大小: {chunk_size}, 重叠: {overlap}")
+        # 默认分块器类型
+        chunker_type = args.chunker_type or config.get('chunking', {}).get('chunker_type', 'smart')
+        
+        logger.info(f"使用配置参数 - 块大小: {chunk_size}, 重叠: {overlap}, 分块器类型: {chunker_type}")
         
         # 创建RAG处理器，指定向量库存储路径
         vector_store_path = args.store_path or config.get('vector_store_path', './vector_store_text_embedding')
@@ -125,7 +128,8 @@ def store_documents(args):
             embedding_provider=embedding_provider,
             chunk_size=chunk_size,
             overlap=overlap,
-            vector_store_path=vector_store_path
+            vector_store_path=vector_store_path,
+            chunker_type=chunker_type
         )
         
         # 尝试从现有向量库加载（如果存在）
@@ -239,6 +243,8 @@ def main():
     store_parser = subparsers.add_parser('store', help='存储文档到向量库')
     store_parser.add_argument('--files', nargs='+', help='要存储的文档文件路径')
     store_parser.add_argument('--store-path', help='向量库存储路径，默认为 ./vector_store_text_embedding')
+    store_parser.add_argument('--chunker-type', choices=['default', 'regulation', 'audit_report', 'smart'], default='smart',
+                             help='分块器类型：default (默认), regulation (制度文件), audit_report (审计报告), smart (智能识别)')
     
     # 搜索命令
     search_parser = subparsers.add_parser('search', help='从向量库搜索文档')

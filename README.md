@@ -9,11 +9,11 @@
 - 使用Faiss进行高效的向量相似性搜索
 - 支持中文文档处理
 - 可配置的文档分块策略
-- **独立的存储和搜索功能**：支持独立的存储和搜索命令
-- **多文件支持**：支持同时处理多个文档
-- **持久化向量库**：支持向量库的保存和加载，实现跨会话使用
-- **HTTP API接口**：支持通过HTTP请求进行存储、搜索和清除操作
-- **灵活的命令行接口**：清晰的命令行界面
+- **意图驱动搜索**：识别用户意图并动态路由至不同库（制度/报告/问题库）
+- **重排序增强**：集成rerank模型提升相关性
+- **LLM智能问答**：基于意图识别和检索结果生成精准回答
+- **持久化向量库**：支持增量上传与自动加载
+- **HTTP API接口**：提供现代化的RESTful API，支持智能问答与搜索
 
 ## 安装依赖
 
@@ -83,7 +83,9 @@ API端点：
 
 - `GET  /health` - 健康检查
 - `POST /store` - 存储文档
-- `POST /search` - 搜索文档
+- `POST /upload_store` - (推荐) 上传并存储文档(文件)
+- `POST /search_with_intent` - (推荐) 意图识别智能搜索
+- `POST /ask` - 意图驱动LLM问答
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
 
@@ -104,15 +106,12 @@ curl -X POST http://localhost:8000/store \
   }'
 ```
 
-#### 搜索文档API示例：
+#### 智能搜索API示例：
 
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:8000/search_with_intent \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "搜索关键词",
-    "top_k": 5
-  }'
+  -d '{"query": "采购管理有哪些制度要求？"}'
 ```
 
 #### 清空向量库API示例：

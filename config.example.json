@@ -3,22 +3,32 @@
     "embedding_model": {
       "provider": "openai",
       "model_name": "text-embedding-v4",
-      "api_key": "your_development_api_key_here",
-      "endpoint": "https://your-embedding-provider.com/v1",
+      "api_key": "YOUR_DEVELOPMENT_API_KEY_HERE",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "dimension": 1024,
       "ssl_verify": true
     },
     "rerank_model": {
       "provider": "aliyun",
       "model_name": "qwen3-rerank",
-      "api_key": "your_development_api_key_here",
-      "endpoint": "https://your-rerank-provider.com/v1",
+      "api_key": "YOUR_DEVELOPMENT_API_KEY_HERE",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-api/v1",
       "dimension": 1024,
+      "ssl_verify": true
+    },
+    "llm_model": {
+      "provider": "deepseek",
+      "model_name": "deepseek-chat",
+      "api_key": "YOUR_DEEPSEEK_API_KEY_HERE",
+      "endpoint": "https://api.deepseek.com/v1",
+      "temperature": 0.7,
+      "max_tokens": 2000,
       "ssl_verify": true
     },
     "chunking": {
       "chunk_size": 512,
-      "overlap": 50
+      "overlap": 50,
+      "chunker_type": "smart"
     },
     "search": {
       "top_k": 5,
@@ -30,7 +40,7 @@
     "embedding_model": {
       "provider": "openai",
       "model_name": "bge",
-      "api_key": "your_production_api_key_here",
+      "api_key": "YOUR_PRODUCTION_API_KEY_HERE",
       "endpoint": "https://your-production-embedding.com/v1",
       "dimension": 1024,
       "ssl_verify": false
@@ -38,14 +48,24 @@
     "rerank_model": {
       "provider": "openai",
       "model_name": "bge-reranker-large",
-      "api_key": "your_production_api_key_here",
+      "api_key": "YOUR_PRODUCTION_API_KEY_HERE",
       "endpoint": "https://your-production-rerank.com/v1",
       "dimension": 1024,
       "ssl_verify": false
     },
+    "llm_model": {
+      "provider": "deepseek",
+      "model_name": "deepseek-chat",
+      "api_key": "YOUR_DEEPSEEK_API_KEY_HERE",
+      "endpoint": "https://api.deepseek.com/v1",
+      "temperature": 0.7,
+      "max_tokens": 2000,
+      "ssl_verify": false
+    },
     "chunking": {
       "chunk_size": 512,
-      "overlap": 50
+      "overlap": 50,
+      "chunker_type": "smart"
     },
     "search": {
       "top_k": 5,

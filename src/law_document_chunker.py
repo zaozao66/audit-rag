@@ -1,7 +1,7 @@
 import re
 import logging
 from typing import List, Dict, Any
-from .document_chunker import DocumentChunker
+from document_chunker import DocumentChunker
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -161,6 +161,8 @@ class LawDocumentChunker(DocumentChunker):
                     'doc_id': document.get('doc_id', ''),
                     'filename': filename,
                     'file_type': document.get('file_type', ''),
+                    'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
+                    'title': document.get('title', ''),  # 添加标题
                     'text': full_content,
                     'semantic_boundary': section_type,
                     'section_path': current_section_path.copy(),
@@ -299,6 +301,8 @@ class LawDocumentChunker(DocumentChunker):
                     'doc_id': '',
                     'filename': 'law_document',
                     'file_type': 'txt',
+                    'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
+                    'title': document.get('title', ''),  # 添加标题
                     'text': current_chunk.strip(),
                     'semantic_boundary': 'sub_article',
                     'section_path': section_path.copy(),
@@ -320,6 +324,8 @@ class LawDocumentChunker(DocumentChunker):
                 'doc_id': '',
                 'filename': 'law_document',
                 'file_type': 'txt',
+                'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
+                'title': document.get('title', ''),  # 添加标题
                 'text': current_chunk.strip(),
                 'semantic_boundary': 'sub_article',
                 'section_path': section_path.copy(),
@@ -337,9 +343,11 @@ class LawDocumentChunker(DocumentChunker):
         all_chunks = []
         
         for doc in documents:
-            # 检查是否为法规类文档
-            if self._is_law_document(doc):
-                logger.info(f"检测到法规文档，使用法规分块器: {doc.get('filename', 'unknown')}")
+            # 如果显式指定了使用法规分块器，或者自动检测是法规文档，则使用专门逻辑
+            # 注意：如果是从 SmartChunker 调用的，我们会通过 _is_law_document 判断
+            # 但如果是 RAGProcessor 直接持有的 LawDocumentChunker，则强制使用
+            if self.__class__ == LawDocumentChunker or self._is_law_document(doc):
+                logger.info(f"使用法规分块逻辑处理: {doc.get('filename', 'unknown')}")
                 chunks = self.chunk_law_document(doc)
             else:
                 # 对非法规文档使用普通分块方法
