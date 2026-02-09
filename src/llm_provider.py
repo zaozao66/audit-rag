@@ -5,6 +5,7 @@ LLM提供者 - 用于生成式回答
 
 import logging
 import json
+import httpx
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 
@@ -49,10 +50,17 @@ class LLMProvider:
         
         if endpoint:
             client_kwargs["base_url"] = endpoint
+        
+        # 配置SSL验证
+        if not ssl_verify:
+            # 创建自定义 httpx 客户端，禁用 SSL 验证
+            http_client = httpx.Client(verify=False)
+            client_kwargs["http_client"] = http_client
+            logger.warning(f"LLM客户端已禁用SSL验证 (ssl_verify=False)")
             
         self.client = OpenAI(**client_kwargs)
         
-        logger.info(f"LLM提供者初始化完成，模型: {model_name}, 端点: {endpoint or 'default'}")
+        logger.info(f"LLM提供者初始化完成 - 模型: {model_name}, 端点: {endpoint or 'default'}, SSL验证: {ssl_verify}")
     
     def generate_answer(
         self,
@@ -91,19 +99,40 @@ class LLMProvider:
             logger.info(f"端点: {self.endpoint or 'default'}")
             logger.info(f"温度: {self.temperature}")
             logger.info(f"最大tokens: {self.max_tokens}")
+            logger.info(f"SSL验证: {self.ssl_verify}")
             logger.info(f"\n系统提示词:\n{system_prompt}")
             logger.info(f"\n用户输入:\n{user_prompt}")
             logger.info("=" * 60)
             
             # 调用LLM生成回答
             logger.info(f"正在调用LLM生成回答...")
+            logger.info(f"请求URL: {self.endpoint or 'https://api.openai.com/v1'}")
+            logger.info(f"请求参数: model={self.model_name}, temperature={self.temperature}, max_tokens={self.max_tokens}")
             
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
+                )
+            except Exception as api_error:
+                logger.error("=" * 60)
+                logger.error("LLM API调用失败详情:")
+                logger.error(f"错误类型: {type(api_error).__name__}")
+                logger.error(f"错误信息: {str(api_error)}")
+                logger.error(f"请求端点: {self.endpoint or 'default'}")
+                logger.error(f"模型名称: {self.model_name}")
+                
+                # 尝试获取更详细的错误信息
+                if hasattr(api_error, 'response'):
+                    logger.error(f"HTTP状态码: {getattr(api_error.response, 'status_code', 'N/A')}")
+                    logger.error(f"响应内容: {getattr(api_error.response, 'text', 'N/A')}")
+                if hasattr(api_error, '__cause__'):
+                    logger.error(f"根本原因: {api_error.__cause__}")
+                
+                logger.error("=" * 60)
+                raise
             
             answer = response.choices[0].message.content
             
@@ -170,17 +199,36 @@ class LLMProvider:
             # 构建意图识别请求详情打印
             logger.info("=" * 60)
             logger.info("意图识别请求详情:")
+            logger.info(f"模型: {self.model_name}")
+            logger.info(f"端点: {self.endpoint or 'default'}")
             logger.info(f"Prompt:\n{intent_prompt}")
             logger.info("=" * 60)
 
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": "你是一个严格只返回JSON格式的后端助手。"},
-                    {"role": "user", "content": intent_prompt}
-                ],
-                temperature=0.1
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": "你是一个严格只返回JSON格式的后端助手。"},
+                        {"role": "user", "content": intent_prompt}
+                    ],
+                    temperature=0.1
+                )
+            except Exception as api_error:
+                logger.error("=" * 60)
+                logger.error("意图识别API调用失败:")
+                logger.error(f"错误类型: {type(api_error).__name__}")
+                logger.error(f"错误信息: {str(api_error)}")
+                logger.error(f"请求端点: {self.endpoint or 'default'}")
+                
+                # 尝试获取更详细的错误信息
+                if hasattr(api_error, 'response'):
+                    logger.error(f"HTTP状态码: {getattr(api_error.response, 'status_code', 'N/A')}")
+                    logger.error(f"响应内容: {getattr(api_error.response, 'text', 'N/A')}")
+                if hasattr(api_error, '__cause__'):
+                    logger.error(f"根本原因: {api_error.__cause__}")
+                
+                logger.error("=" * 60)
+                raise
             
             raw_content = response.choices[0].message.content.strip()
             logger.info("-" * 60)

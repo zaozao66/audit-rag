@@ -333,6 +333,169 @@ def ask_with_llm():
         return jsonify({"error": f"LLM问答失败: {str(e)}"}), 500
 
 
+@app.route('/v1/chat/completions', methods=['POST'])
+def chat_completions():
+    """
+    OpenAI兼容的问答接口
+    支持流式和非流式响应
+    
+    请求格式:
+    {
+        "messages": [{"role": "user", "content": "你的问题"}],
+        "stream": false,  // 可选，默认false
+        "top_k": 5        // 可选，检索文档数量
+    }
+    """
+    global rag_processor
+    try:
+        rag_processor = initialize_rag_processor(use_rerank=True, use_llm=True)
+        
+        data = request.get_json()
+        if not data or 'messages' not in data:
+            return jsonify({"error": "缺少messages字段"}), 400
+        
+        messages = data['messages']
+        if not messages or not isinstance(messages, list):
+            return jsonify({"error": "messages必须是非空数组"}), 400
+        
+        # 提取用户最后一条消息作为查询
+        user_message = None
+        for msg in reversed(messages):
+            if msg.get('role') == 'user':
+                user_message = msg.get('content', '')
+                break
+        
+        if not user_message:
+            return jsonify({"error": "未找到用户消息"}), 400
+        
+        stream = data.get('stream', False)
+        top_k = data.get('top_k', 5)
+        
+        logger.info(f"OpenAI兼容接口收到请求: query='{user_message[:50]}...', stream={stream}, top_k={top_k}")
+        
+        if stream:
+            # 流式响应
+            return Response(
+                _stream_chat_completion(user_message, top_k),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'X-Accel-Buffering': 'no'
+                }
+            )
+        else:
+            # 非流式响应
+            result = rag_processor.search_with_llm_answer(user_message, top_k=top_k)
+            
+            response = {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": result['answer']
+                    },
+                    "finish_reason": "stop",
+                    "index": 0
+                }],
+                "model": result.get('model', 'unknown'),
+                "usage": result.get('llm_usage', {}),
+                "intent": result.get('intent', 'unknown')
+            }
+            
+            return jsonify(response)
+            
+    except ValueError as e:
+        if "LLM功能未启用" in str(e):
+            return jsonify({
+                "error": {
+                    "message": "LLM功能未配置，请在config.json中配置LLM API密钥",
+                    "type": "service_unavailable",
+                    "code": 503
+                }
+            }), 503
+        elif "向量库不存在" in str(e):
+            return jsonify({
+                "error": {
+                    "message": "向量库不存在，请先存储文档",
+                    "type": "not_found",
+                    "code": 404
+                }
+            }), 404
+        else:
+            logger.error(f"问答失败: {e}")
+            return jsonify({
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request",
+                    "code": 400
+                }
+            }), 400
+    except Exception as e:
+        logger.error(f"问答失败: {e}", exc_info=True)
+        return jsonify({
+            "error": {
+                "message": f"内部服务错误: {str(e)}",
+                "type": "internal_error",
+                "code": 500
+            }
+        }), 500
+
+
+def _stream_chat_completion(query: str, top_k: int):
+    """
+    生成流式响应的生成器函数
+    
+    :param query: 用户查询
+    :param top_k: 检索文档数量
+    :yield: SSE格式的数据流
+    """
+    try:
+        global rag_processor
+        
+        # 执行检索和生成
+        result = rag_processor.search_with_llm_answer(query, top_k=top_k)
+        answer = result['answer']
+        
+        # 将完整答案拆分成chunks进行流式传输
+        # 模拟流式效果：每次发送若干字符
+        chunk_size = 20  # 每个chunk包含的字符数
+        
+        for i in range(0, len(answer), chunk_size):
+            chunk_content = answer[i:i + chunk_size]
+            
+            chunk_data = {
+                "choices": [{
+                    "delta": {
+                        "content": chunk_content
+                    },
+                    "index": 0,
+                    "finish_reason": None
+                }]
+            }
+            
+            yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+        
+        # 发送结束标记
+        final_chunk = {
+            "choices": [{
+                "delta": {},
+                "index": 0,
+                "finish_reason": "stop"
+            }]
+        }
+        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        logger.error(f"流式响应生成失败: {e}", exc_info=True)
+        error_data = {
+            "error": {
+                "message": str(e),
+                "type": "internal_error"
+            }
+        }
+        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+
+
 @app.route('/clear', methods=['POST'])
 def clear_vector_store():
     """清空向量库接口"""
