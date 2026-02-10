@@ -42,7 +42,7 @@ class VectorStore:
         embeddings_array = np.array(embeddings).astype('float32')
         
         # 如果使用内积作为距离度量，需要对向量进行L2归一化
-        if self.metric_type == faiss.METRIC_INNER_PRODUCT and not self.is_normalized:
+        if self.metric_type == faiss.METRIC_INNER_PRODUCT:
             faiss.normalize_L2(embeddings_array)
             self.is_normalized = True
         
@@ -65,7 +65,7 @@ class VectorStore:
         query_array = np.array([query_embedding]).astype('float32')
         
         # 如果使用内积度量，需要对查询向量也进行归一化
-        if self.metric_type == faiss.METRIC_INNER_PRODUCT and self.is_normalized:
+        if self.metric_type == faiss.METRIC_INNER_PRODUCT:
             faiss.normalize_L2(query_array)
         
         # 执行Faiss搜索
@@ -121,3 +121,6 @@ class VectorStore:
         # 加载文档信息
         with open(f"{filepath}.docs", 'rb') as f:
             self.documents = pickle.load(f)
+        # 兼容历史数据：内积模式下默认视为已归一化
+        if self.metric_type == faiss.METRIC_INNER_PRODUCT:
+            self.is_normalized = True

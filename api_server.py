@@ -250,10 +250,6 @@ def ask_with_llm():
             "llm_usage": result['llm_usage'],
             "model": result['model']
         })
-    except Exception as e:
-        logger.error(f"LLM问答出错: {e}")
-        return jsonify({"error": f"问答失败: {str(e)}"}), 500
-        
     except ValueError as e:
         if "LLM功能未启用" in str(e):
             return jsonify({"error": "LLM功能未配置，请在config.json中配置LLM API密钥"}), 503

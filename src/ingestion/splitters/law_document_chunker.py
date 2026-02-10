@@ -117,7 +117,7 @@ class LawDocumentChunker(DocumentChunker):
                 
             # 检查内容长度，如果太长则进一步分块
             if len(full_content) > self.chunk_size:
-                sub_chunks = self._split_large_content(full_content, current_section_path)
+                sub_chunks = self._split_large_content(full_content, current_section_path, document)
                 chunks.extend(sub_chunks)
             else:
                 # 过滤掉只有标题而没有实质内容的块
@@ -259,7 +259,7 @@ class LawDocumentChunker(DocumentChunker):
         
         return None, ''
     
-    def _split_large_content(self, content: str, section_path: List[str]) -> List[Dict[str, Any]]:
+    def _split_large_content(self, content: str, section_path: List[str], document: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         将大块内容进一步分割，同时保持上下文信息
         :param content: 大块内容
