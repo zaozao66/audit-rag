@@ -128,29 +128,34 @@ audit-rag/
 ├── api_server.py           # HTTP API服务器
 ├── cli_app.py              # 命令行接口应用程序
 ├── config.json             # 配置文件
+├── win_manage.bat          # Windows 服务管理脚本
+├── deploy.sh               # 自动化部署脚本
 ├── requirements.txt        # 依赖包列表
-├── README.md               # 项目说明
-├── USAGE_GUIDE.md          # 详细使用说明
-├── start.sh                # 命令行启动脚本
-├── start_api.sh            # HTTP API启动脚本
-├── src/                    # 源代码目录
-│   ├── __init__.py
-│   ├── config_loader.py    # 配置加载
-│   ├── document_chunker.py # 文档分块处理
-│   ├── document_processor.py # 文档格式处理
-│   ├── embedding_providers.py # 嵌入模型提供者
-│   ├── rag_processor.py    # RAG处理主逻辑
-│   └── vector_store.py     # 向量存储
-└── data/                   # 数据目录
-    └── vector_store_text_embedding.*  # 向量库文件
+├── src/                    # 源代码分层结构
+│   ├── core/               # 核心层：抽象定义与组件工厂 (Factory Pattern)
+│   │   ├── factory.py      # 组件创建工厂
+│   │   ├── interfaces.py   # 接口契约定义
+│   │   └── schemas.py      # 数据模型定义
+│   ├── ingestion/          # 解析层：文档解析与分块
+│   │   ├── parsers/        # 文档格式解析 (支持 PDF 表格逻辑聚合)
+│   │   └── splitters/      # 智能分块策略 (制度模式、审计报告模式、台账模式)
+│   ├── indexing/           # 存储层：向量化与持久化
+│   │   └── vector/         # 向量数据库实现与 Embedding Provider
+│   ├── retrieval/          # 检索层：搜索、路由与重排
+│   │   ├── router/         # 意图路由 (Intent Routing) 与流程编排
+│   │   ├── searchers/      # 具体检索策略实现
+│   │   └── rerank/         # 重排序提供者实现
+│   ├── llm/                # 生成层：大语言模型集成
+│   │   └── providers/      # 各类模型厂商 (OpenAI/DeepSeek 等) 接入
+│   └── utils/              # 工具层：基础辅助功能
+└── data/                   # 数据目录 (存放持久化 Faiss 索引及文档映射)
 ```
 
 ## 技术架构
 
-- 文档处理：支持PDF（pdfplumber）、DOCX（python-docx）、TXT（内置）格式
-- 文档分块：基于语义边界的智能分块算法
-- 嵌入模型：text-embedding-v4
-- 向量存储：Faiss索引，支持持久化
-- 搜索算法：余弦相似度匹配
-- 命令行接口：支持独立的存储和搜索功能
-- HTTP API：Flask Web服务，支持RESTful接口
+- **文档处理**：支持 PDF（含表格逻辑聚合）、DOCX、TXT 格式解析
+- **分块策略**：基于语义边界的智能分块，内置制度（章/节/条）、报告（一/（一））、审计台账（逻辑行）等专项优化
+- **嵌入模型**：厂商中立设计，支持 text-embedding-v4、BGE 等多种 Embedding 模型
+- **向量存储**：基于 Faiss 的高效向量检索，支持元数据过滤与持久化
+- **检索增强**：集成意图路由 (Intent Routing) 与多级重排序 (Rerank) 机制
+- **接口规范**：提供 RESTful 标准接口，并兼容 OpenAI Chat Completions 协议（支持流式响应）

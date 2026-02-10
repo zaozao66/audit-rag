@@ -1,7 +1,7 @@
 import re
 import logging
 from typing import List, Dict, Any
-from document_chunker import DocumentChunker
+from src.ingestion.splitters.document_chunker import DocumentChunker
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

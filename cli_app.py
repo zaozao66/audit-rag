@@ -66,9 +66,9 @@ import sys
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from config_loader import load_config
-from src.embedding_providers import TextEmbeddingProvider
-from src.rag_processor import RAGProcessor, process_user_uploaded_documents
+from src.utils.config_loader import load_config
+from src.indexing.vector.embedding_providers import TextEmbeddingProvider
+from src.retrieval.router.rag_processor import RAGProcessor, process_user_uploaded_documents
 
 
 def create_embedding_provider(config: dict) -> TextEmbeddingProvider:
@@ -293,7 +293,7 @@ def main():
         except ValueError as ve:
             if "没有可保存的向量库" in str(ve):
                 # 如果向量库未初始化，创建一个新的空向量库并保存
-                from src.vector_store import VectorStore
+                from src.indexing.vector.vector_store import VectorStore
                 rag_processor.vector_store = VectorStore(dimension=rag_processor.dimension or 1024)
                 rag_processor.save_vector_store()
             else:

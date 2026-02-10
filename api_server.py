@@ -14,15 +14,14 @@ from werkzeug.utils import secure_filename
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from config_loader import load_config
-from embedding_providers import TextEmbeddingProvider
-from rag_processor import RAGProcessor, process_user_uploaded_documents, SmartChunker
-from document_chunker import DocumentChunker
-from law_document_chunker import LawDocumentChunker
-from audit_report_chunker import AuditReportChunker
-from audit_issue_chunker import AuditIssueChunker
-from rerank_provider import AliyunRerankProvider
-from llm_provider import create_llm_provider
+from src.utils.config_loader import load_config
+from src.retrieval.router.rag_processor import RAGProcessor, process_user_uploaded_documents
+from src.ingestion.splitters.smart_chunker import SmartChunker
+from src.ingestion.splitters.document_chunker import DocumentChunker
+from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
+from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
+from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
+from src.core.factory import RAGFactory
 
 # 配置日志
 # 根据环境决定日志文件位置
@@ -63,11 +62,9 @@ def initialize_rag_processor(chunker_type: str = None, use_rerank: bool = False,
     """初始化RAG处理器"""
     global rag_processor
     
-    # 如果指定了分块器类型，且当前处理器类型不同，则重新初始化
-    # 或者如果重排序设置不匹配，也重新初始化
-    # 或者如果LLM设置不匹配，也重新初始化
     current_use_rerank = rag_processor is not None and rag_processor.rerank_provider is not None
     current_use_llm = rag_processor is not None and rag_processor.llm_provider is not None
+    
     if rag_processor is not None:
         type_mismatch = chunker_type is not None and rag_processor.chunker_type != chunker_type
         rerank_mismatch = current_use_rerank != use_rerank
@@ -77,85 +74,22 @@ def initialize_rag_processor(chunker_type: str = None, use_rerank: bool = False,
     
     if rag_processor is None:
         try:
-            # 加载配置
-            logger.info("加载配置文件...")
+            logger.info("使用 RAGFactory 初始化处理器...")
             config = load_config()
-            
-            # 确定分块器类型：优先使用传入的，否则使用配置中的
-            if chunker_type is None:
-                chunker_type = config.get('chunking', {}).get('chunker_type', 'smart')
-            
-            # 获取环境信息
             env = config.get('environment', 'development')
-            logger.info(f"当前运行环境: {env}")
             
-            logger.info("创建嵌入提供者...")
-            embedding_config = config['embedding_model']
-            api_key = embedding_config['api_key']
-            endpoint = embedding_config['endpoint']
-            model_name = embedding_config['model_name']
-            ssl_verify = embedding_config.get('ssl_verify', True)
+            # 使用工厂创建组件
+            embedding_provider = RAGFactory.create_embedding_provider(config, env)
+            llm_provider = RAGFactory.create_llm_provider(config) if use_llm else None
+            rerank_provider = RAGFactory.create_rerank_provider(config, env) if use_rerank else None
             
-            # 创建嵌入提供者，支持SSL验证控制
-            embedding_provider = TextEmbeddingProvider(
-                api_key=api_key,
-                endpoint=endpoint,
-                model_name=model_name,
-                ssl_verify=ssl_verify,
-                env=env
-            )
-            
-            # 创建LLM提供者
-            llm_provider = None
-            if use_llm:
-                logger.info("创建LLM提供者...")
-                try:
-                    llm_config = config.get('llm_model', {})
-                    if 'api_key' in llm_config and llm_config['api_key'] and llm_config['api_key'] != 'YOUR_DEEPSEEK_API_KEY_HERE':
-                        llm_provider = create_llm_provider(llm_config)
-                    else:
-                        logger.warning("LLM API密钥未配置，LLM功能将被禁用")
-                except Exception as e:
-                    logger.error(f"创建LLM提供者失败: {e}")
-                    raise
-            
-            # 创建重排序提供者
-            rerank_provider = None
-            if use_rerank:
-                logger.info("创建重排序提供者...")
-                try:
-                    rerank_config = config.get('rerank_model', {})
-                    
-                    if 'api_key' in rerank_config and rerank_config['api_key']:
-                        ssl_verify_rerank = rerank_config.get('ssl_verify', True)
-                        # 不再使用硬编码的默认值，因为在配置文件中已经定义了正确的值
-                        endpoint = rerank_config.get('endpoint')
-                        if not endpoint:
-                            # 如果配置中没有指定端点，使用空字符串，让AliyunRerankProvider使用其默认值
-                            endpoint = 'https://dashscope.aliyuncs.com/api/v1/services/rerank/text-retrieve-rerank'
-                        rerank_provider = AliyunRerankProvider(
-                            api_key=rerank_config['api_key'],
-                            model_name=rerank_config.get('model_name', 'gte-rerank'),
-                            endpoint=endpoint,
-                            ssl_verify=ssl_verify_rerank,
-                            env=config.get('environment', 'development')
-                        )
-                    else:
-                        logger.warning("重排序API密钥未配置，使用模拟重排序提供者")
-                        rerank_provider = MockRerankProvider()
-                except Exception as e:
-                    logger.error(f"创建重排序提供者失败: {e}")
-                    raise  # 实现 fail-fast 行为，直接抛出异常
-            
-            # 获取配置参数
-            chunk_size = config['chunking']['chunk_size']
-            overlap = config['chunking']['overlap']
+            # 获取通用配置
+            chunk_size = config.get('chunking', {}).get('chunk_size', 512)
+            overlap = config.get('chunking', {}).get('overlap', 50)
             vector_store_path = config.get('vector_store_path', './data/vector_store_text_embedding')
-            # 默认分块器类型
-            chunker_type = config.get('chunking', {}).get('chunker_type', 'smart')
             
-            logger.info(f"使用配置参数 - 块大小: {chunk_size}, 重叠: {overlap}, 分块器类型: {chunker_type}")
-            logger.info(f"向量库存储路径: {vector_store_path}")
+            # 确定分块器类型
+            final_chunker_type = chunker_type or config.get('chunking', {}).get('chunker_type', 'smart')
             
             # 创建RAG处理器
             rag_processor = RAGProcessor(
@@ -163,7 +97,7 @@ def initialize_rag_processor(chunker_type: str = None, use_rerank: bool = False,
                 chunk_size=chunk_size,
                 overlap=overlap,
                 vector_store_path=vector_store_path,
-                chunker_type=chunker_type,
+                chunker_type=final_chunker_type,
                 rerank_provider=rerank_provider,
                 llm_provider=llm_provider
             )
@@ -523,7 +457,7 @@ def clear_vector_store():
         except ValueError as ve:
             if "没有可保存的向量库" in str(ve):
                 # 如果向量库未初始化，创建一个新的空向量库并保存
-                from src.vector_store import VectorStore
+                from src.indexing.vector.vector_store import VectorStore
                 rag_processor.vector_store = VectorStore(dimension=rag_processor.dimension or 1024)
                 rag_processor.save_vector_store()
             else:
@@ -744,7 +678,7 @@ def test_chunking_upload():
         
         try:
             # 使用文档处理器读取文件内容
-            from src.document_processor import process_uploaded_documents
+            from src.ingestion.parsers.document_processor import process_uploaded_documents
             file_paths = [temp_file.name]
             # 传递 doc_type，确保如果是 audit_issue 会调用表格提取逻辑
             processed_docs = process_uploaded_documents(file_paths, doc_type=doc_type)

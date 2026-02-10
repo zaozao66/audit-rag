@@ -8,22 +8,27 @@ audit-rag/
 ├── api_server.py           # HTTP API服务器
 ├── cli_app.py              # 命令行接口应用程序
 ├── config.json             # 配置文件
+├── win_manage.bat          # Windows 服务管理脚本
+├── deploy.sh               # 自动化部署脚本
 ├── requirements.txt        # 依赖包列表
-├── README.md               # 项目说明
-├── USAGE_GUIDE.md          # 本文件
-├── start.sh                # 命令行启动脚本
-├── start_api.sh            # HTTP API启动脚本
-├── src/                    # 源代码目录
-│   ├── __init__.py
-│   ├── config_loader.py    # 配置加载
-│   ├── document_chunker.py # 文档分块处理
-│   ├── document_processor.py # 文档格式处理
-│   ├── embedding_providers.py # 嵌入模型提供者
-│   ├── rag_processor.py    # RAG处理主逻辑
-│   └── vector_store.py     # 向量存储
-├── data/                   # 数据目录
-│   └── vector_store_text_embedding.*  # 向量库文件
-└── docs/                   # 文档目录
+├── src/                    # 源代码分层结构
+│   ├── core/               # 核心层：抽象定义与组件工厂 (Factory Pattern)
+│   │   ├── factory.py      # 组件创建工厂
+│   │   ├── interfaces.py   # 接口契约定义
+│   │   └── schemas.py      # 数据模型定义
+│   ├── ingestion/          # 解析层：文档解析与分块
+│   │   ├── parsers/        # 文档格式解析 (支持 PDF 表格逻辑聚合)
+│   │   └── splitters/      # 智能分块策略 (制度模式、审计报告模式、台账模式)
+│   ├── indexing/           # 存储层：向量化与持久化
+│   │   └── vector/         # 向量数据库实现与 Embedding Provider
+│   ├── retrieval/          # 检索层：搜索、路由与重排
+│   │   ├── router/         # 意图路由 (Intent Routing) 与流程编排
+│   │   ├── searchers/      # 具体检索策略实现
+│   │   └── rerank/         # 重排序提供者实现
+│   ├── llm/                # 生成层：大语言模型集成
+│   │   └── providers/      # 各类模型厂商 (OpenAI/DeepSeek 等) 接入
+│   └── utils/              # 工具层：基础辅助功能
+└── data/                   # 数据目录 (存放持久化 Faiss 索引及文档映射)
 ```
 
 ## 功能特性
@@ -257,13 +262,12 @@ curl -X POST http://localhost:8000/search_with_intent \
   }'
 ```
 
-**意图分类逻辑：**
-- `regulation_query`: 侧重搜索制度库，检索深度适中
-- `audit_query`: 侧重搜索审计报告库，检索深度适中
-- `audit_analysis`: 针对分析类问题，自动将 `top_k` 提升至 20+，以获取更广的上下文覆盖
-- `comprehensive_query`: 跨库全面检索
+#### 智能搜索接口功能
 
-返回结果中将包含 `intent`（意图类型）和 `suggested_top_k`（自动推荐的检索深度）。
+1. **自动库筛选**：根据意图决定搜索 `internal_regulation` 还是 `internal_report` 库。
+2. **动态检索深度**：普通查询 `top_k=5`，分析类查询自动提升至 `top_k=20`。
+3. **分阶段优化**：集成向量检索 -> 元数据过滤 -> LLM 意图识别 -> 结果重排序的全链路。
+4. **兼容性响应**：支持标准 JSON 格式及符合 OpenAI 规范的消息流。
 
 #### LLM问答API
 
@@ -565,7 +569,33 @@ sudo journalctl -u rag-api -f
 
 systemd服务方式提供了更好的进程管理和系统集成，适合在生产环境中使用.
 
-## 开发与生产环境模式
+#### 4. Windows环境部署
+
+针对 Windows 环境，提供了批处理脚本用于管理服务：
+
+启动、停止或重启服务：
+
+```batch
+# 启动服务 (默认端口8000, 开发模式)
+win_manage.bat start
+
+# 指定端口和模式启动
+win_manage.bat start 9000 production
+
+# 停止服务
+win_manage.bat stop 8000
+
+# 重启服务
+win_manage.bat restart 8000 production
+```
+
+**Windows 脚本特性：**
+- **智能检测**：启动前自动检查端口占用情况。
+- **独立运行**：使用 `start` 命令在独立窗口中启动 Python 进程，方便实时观察日志。
+- **快速停止**：通过端口号精准定位并终止相关 PID，无需手动查找任务管理器。
+- **环境切换**：支持通过参数快速切换 `development` 和 `production` 模式。
+
+## 环境模式与配置说明
 
 系统支持开发和生产两种环境模式，配置从 `config.json` 文件中读取：
 
