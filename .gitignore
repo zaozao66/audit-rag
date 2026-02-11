@@ -30,8 +30,7 @@ env/
 config.json
 # 运行时生成的文件
 api_server.pid
-data/vector_store_*.docs
-data/vector_store_*.index
+data/
 *.pid
 
 # Frontend (React + Vite)
