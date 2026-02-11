@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { deleteDocument, getDocumentChunks, getDocumentDetail } from '../api/rag';
+import { clearAllDocuments, deleteDocument, getDocumentChunks, getDocumentDetail } from '../api/rag';
 import type { DocumentChunksData, DocumentRecord } from '../types/rag';
 
 interface DocumentsPanelProps {
@@ -10,6 +10,7 @@ interface DocumentsPanelProps {
   includeDeleted: boolean;
   onFilterChange: (next: { docType: string; keyword: string; includeDeleted: boolean }) => void;
   onRefresh: () => void;
+  onDataChanged?: () => void;
 }
 
 export function DocumentsPanel({
@@ -19,7 +20,8 @@ export function DocumentsPanel({
   keyword,
   includeDeleted,
   onFilterChange,
-  onRefresh
+  onRefresh,
+  onDataChanged
 }: DocumentsPanelProps) {
   const [selectedId, setSelectedId] = useState('');
   const [chunkData, setChunkData] = useState<DocumentChunksData | null>(null);
@@ -55,8 +57,30 @@ export function DocumentsPanel({
       setChunkData(null);
       setSelectedId('');
       onRefresh();
+      onDataChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const removeAllDocs = async () => {
+    if (!window.confirm('确认清空所有文档吗？该操作会真实删除向量和元数据，且不可恢复。')) return;
+
+    setWorking(true);
+    setError('');
+    try {
+      const result = await clearAllDocuments();
+      setChunkData(null);
+      setSelectedId('');
+      onRefresh();
+      onDataChanged?.();
+      if (!result.success) {
+        setError(result.error ?? '清空失败');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '清空失败');
     } finally {
       setWorking(false);
     }
@@ -66,7 +90,12 @@ export function DocumentsPanel({
     <section className="panel panel-documents">
       <header className="panel-header">
         <h2>文档管理</h2>
-        <button onClick={onRefresh} disabled={loading || working}>{loading ? '刷新中...' : '刷新列表'}</button>
+        <div className="actions-row no-margin">
+          <button onClick={onRefresh} disabled={loading || working}>{loading ? '刷新中...' : '刷新列表'}</button>
+          <button className="danger-btn" onClick={removeAllDocs} disabled={loading || working || documents.length === 0}>
+            清空全部文档
+          </button>
+        </div>
       </header>
 
       <div className="form-grid">

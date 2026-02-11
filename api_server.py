@@ -442,29 +442,32 @@ def _stream_chat_completion(query: str, top_k: int):
             })
 
         yield _progress("generation", "running", "LLM回答生成中")
-        llm_result = rag_processor.llm_provider.generate_answer(query, contexts)
-        answer = llm_result.get('answer', '')
+        model_name = "unknown"
+        usage = {}
+
+        # 4) 真实流式输出回答（直接透传LLM增量token）
+        for event in rag_processor.llm_provider.stream_generate_answer(query, contexts):
+            if event.get("type") == "delta":
+                chunk_data = {
+                    "choices": [{
+                        "delta": {
+                            "content": event.get("content", "")
+                        },
+                        "index": 0,
+                        "finish_reason": None
+                    }]
+                }
+                yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+            elif event.get("type") == "done":
+                model_name = event.get("model", "unknown")
+                usage = event.get("usage", {})
+
         yield _progress(
             "generation",
             "done",
-            "回答生成完成，开始流式返回",
-            {"model": llm_result.get("model", "unknown")}
+            "回答生成完成",
+            {"model": model_name, "usage": usage}
         )
-
-        # 4) 逐字流式输出回答
-        chunk_size = 3
-        for i in range(0, len(answer), chunk_size):
-            chunk_content = answer[i:i + chunk_size]
-            chunk_data = {
-                "choices": [{
-                    "delta": {
-                        "content": chunk_content
-                    },
-                    "index": 0,
-                    "finish_reason": None
-                }]
-            }
-            yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
 
         final_chunk = {
             "choices": [{
@@ -884,6 +887,22 @@ def list_documents():
         
     except Exception as e:
         logger.error(f"获取文档列表失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/documents', methods=['DELETE'])
+def clear_all_documents():
+    """硬清空所有文档（向量+元数据）"""
+    global rag_processor
+    try:
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor()
+
+        result = rag_processor.clear_all_documents()
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"清空所有文档失败: {e}")
         return jsonify({"error": str(e)}), 500
 
 

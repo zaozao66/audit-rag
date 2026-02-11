@@ -169,6 +169,14 @@ button:disabled {
   background: #776958;
 }
 
+.danger-btn {
+  background: #c4322e;
+}
+
+.danger-btn:hover {
+  background: #a82a26;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -214,6 +222,10 @@ select {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.actions-row.no-margin {
+  margin-top: 0;
 }
 
 .status-inline {

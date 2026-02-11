@@ -6,10 +6,12 @@
 audit-rag/
 ├── main.py                 # 主程序入口（命令行接口）
 ├── api_server.py           # HTTP API服务器
+├── start_api.sh            # 启动API（含前端构建）
+├── start_api_no_build.sh   # 启动API（不构建前端）
+├── start_api_no_build_daemon.sh   # Linux后台启动（不构建前端）
+├── start_api_no_build_windows.bat # Windows启动（不构建前端）
 ├── cli_app.py              # 命令行接口应用程序
 ├── config.json             # 配置文件
-├── win_manage.bat          # Windows 服务管理脚本
-├── deploy.sh               # 自动化部署脚本
 ├── requirements.txt        # 依赖包列表
 ├── src/                    # 源代码分层结构
 │   ├── core/               # 核心层：抽象定义与组件工厂 (Factory Pattern)
@@ -443,32 +445,29 @@ curl -X POST http://localhost:8000/clear
 
 系统支持在Linux服务器上后台运行，便于长期部署。
 
-#### 后台运行模式
+#### 后台运行模式（无前端构建）
 
 启动后台服务（默认端口8000）：
 
 ```bash
 # 启动后台服务
-./start_daemon.sh
+./start_api_no_build_daemon.sh
 
 # 指定端口启动后台服务
-./start_daemon.sh 9000
+./start_api_no_build_daemon.sh 9000 production
 ```
 
-停止后台服务：
+停止后台服务（按 PID 文件）：
 
 ```bash
-./stop_daemon.sh
+kill "$(cat api_server.pid)"
 ```
 
 重启后台服务：
 
 ```bash
-# 重启服务（使用默认端口）
-./restart_daemon.sh
-
-# 重启服务（指定端口）
-./restart_daemon.sh 9000
+kill "$(cat api_server.pid)"
+./start_api_no_build_daemon.sh 9000 production
 ```
 
 查看服务状态和日志：
@@ -484,41 +483,15 @@ ps aux | grep api_server
 #### 后台运行特性
 
 - 服务在后台持续运行，不会因终端关闭而停止
-- 自动将日志输出到 `logs/api_server.log` 文件
+- 自动将日志输出到 `logs/api_server.out.log` 文件（可通过脚本参数自定义）
 - 使用PID文件跟踪进程状态，防止重复启动
-- 支持优雅启动和停止
-- 提供重启脚本便于维护
+- 支持通过 PID 文件进行停止和重启
 
 #### 使用 systemd 部署 (推荐用于生产环境)
 
 对于Linux服务器，推荐使用systemd服务进行部署，这种方式更稳定可靠。
 
-##### 方法一：使用自动化部署脚本（推荐）
-
-系统提供了一个自动化部署脚本，可以一键完成所有部署步骤：
-
-```bash
-# 查看使用帮助
-./deploy.sh --help
-
-# 基本部署（使用默认设置）
-./deploy.sh
-
-# 指定安装目录和端口
-./deploy.sh --dir /opt/audit-rag --port 8080
-
-# 仅部署代码，不安装systemd服务
-./deploy.sh --no-service
-```
-
-部署脚本会自动：
-- 复制所有必要文件到目标目录
-- 安装Python依赖
-- 配置systemd服务（如果未指定--no-service）
-- 设置开机自启
-- 启动服务
-
-##### 方法二：手动部署
+##### 手动部署
 
 如果你不想使用自动化脚本，也可以手动部署：
 
@@ -571,29 +544,17 @@ systemd服务方式提供了更好的进程管理和系统集成，适合在生�
 
 #### 4. Windows环境部署
 
-针对 Windows 环境，提供了批处理脚本用于管理服务：
-
-启动、停止或重启服务：
+针对 Windows 环境，提供了无前端构建启动脚本：
 
 ```batch
 # 启动服务 (默认端口8000, 开发模式)
-win_manage.bat start
+start_api_no_build_windows.bat
 
 # 指定端口和模式启动
-win_manage.bat start 9000 production
-
-# 停止服务
-win_manage.bat stop 8000
-
-# 重启服务
-win_manage.bat restart 8000 production
+start_api_no_build_windows.bat 9000 production
 ```
 
-**Windows 脚本特性：**
-- **智能检测**：启动前自动检查端口占用情况。
-- **独立运行**：使用 `start` 命令在独立窗口中启动 Python 进程，方便实时观察日志。
-- **快速停止**：通过端口号精准定位并终止相关 PID，无需手动查找任务管理器。
-- **环境切换**：支持通过参数快速切换 `development` 和 `production` 模式。
+停止服务请在 Windows 中结束对应 Python 进程（任务管理器或命令行）。
 
 ## 环境模式与配置说明
 
@@ -640,12 +601,12 @@ python api_server.py --host 0.0.0.0 --port 8000 --env production
 
 开发环境：
 ```bash
-./start_daemon.sh 8000 development
+./start_api_no_build_daemon.sh 8000 development
 ```
 
 生产环境：
 ```bash
-./start_daemon.sh 8000 production
+./start_api_no_build_daemon.sh 8000 production
 ```
 
 **环境变量方式：**

@@ -72,11 +72,17 @@ python main.py clear
 启动HTTP API服务器：
 
 ```bash
-# 默认端口8000
+# 默认端口8000（会先构建前端）
 ./start_api.sh
 
 # 或指定端口
 ./start_api.sh 9000
+
+# 不构建前端，直接启动
+./start_api_no_build.sh
+
+# Linux 后台启动（不构建前端）
+./start_api_no_build_daemon.sh 8000 production
 ```
 
 API端点：
@@ -84,11 +90,13 @@ API端点：
 - `GET  /health` - 健康检查
 - `POST /store` - 存储文档
 - `POST /upload_store` - (推荐) 上传并存储文档(文件)
-- `POST /search_with_intent` - (推荐) 意图识别智能搜索
-- `POST /ask` - 意图驱动LLM问答
+- `POST /search_with_intent` - 意图识别搜索
+- `POST /ask` - 非流式LLM问答
+- `POST /v1/chat/completions` - OpenAI兼容问答（支持流式SSE）
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
 - `GET  /documents` - 文档列表（支持类型/关键字/是否含已删除过滤）
+- `DELETE /documents` - 清空全部文档（真实删除向量与元数据）
 - `GET  /documents/<doc_id>` - 文档详情
 - `DELETE /documents/<doc_id>` - 删除文档
 - `GET  /documents/<doc_id>/chunks` - 文档分块详情
@@ -131,11 +139,14 @@ curl -X POST http://localhost:8000/clear
 audit-rag/
 ├── main.py                 # 主程序入口（命令行接口）
 ├── api_server.py           # HTTP API服务器
+├── start_api.sh            # 启动API（含前端构建）
+├── start_api_no_build.sh   # 启动API（不构建前端）
+├── start_api_no_build_daemon.sh   # Linux后台启动（不构建前端）
+├── start_api_no_build_windows.bat # Windows启动（不构建前端）
 ├── cli_app.py              # 命令行接口应用程序
 ├── config.json             # 配置文件
-├── win_manage.bat          # Windows 服务管理脚本
-├── deploy.sh               # 自动化部署脚本
 ├── requirements.txt        # 依赖包列表
+├── frontend/               # React + Vite 前端工程（构建产物由后端托管）
 ├── src/                    # 源代码分层结构
 │   ├── core/               # 核心层：抽象定义与组件工厂 (Factory Pattern)
 │   │   ├── factory.py      # 组件创建工厂

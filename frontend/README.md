@@ -27,8 +27,8 @@ npm run dev
 
 - 系统状态：展示 `/info` 和 `/documents/stats` 数据
 - 文件上传入库：调用 `/upload_store`，展示新增/跳过/更新统计
-- 检索与问答：调用 `/search_with_intent` 与 `/ask`
-- 文档管理：列表过滤、文档详情、分块查看、删除文档
+- 检索与问答：调用 `/v1/chat/completions`（流式SSE），展示阶段进度（意图识别/向量匹配/回答生成）并实时渲染Markdown
+- 文档管理：列表过滤、文档详情、分块查看、删除文档、清空全部文档（真实删除）
 
 ## 目录结构
 
@@ -47,10 +47,12 @@ frontend/
     ├── components/
     │   ├── SystemPanel.tsx      # 系统状态面板
     │   ├── UploadPanel.tsx      # 上传入库面板
-    │   ├── SearchPanel.tsx      # 检索/问答面板
+    │   ├── SearchPanel.tsx      # 流式问答面板（含进度展示）
     │   └── DocumentsPanel.tsx   # 文档管理面板
     ├── types/
     │   └── rag.ts               # 后端响应类型定义
+    ├── utils/
+    │   └── markdown.ts          # 内置Markdown渲染
     ├── App.tsx
     ├── main.tsx
     ├── styles.css
@@ -61,4 +63,4 @@ frontend/
 
 - 增加鉴权时，在 `src/api/client.ts` 统一注入 token
 - 多环境 API 地址可通过 `.env` 覆盖代理策略
-- 如需路由化可引入 `react-router-dom`，把 4 个面板拆为独立页面
+- 如需路由化可引入 `react-router-dom`，把 Tab 页面拆为独立路由

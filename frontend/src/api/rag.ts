@@ -1,6 +1,7 @@
 import { API_BASE, apiFetch } from './client';
 import type {
   AskResponse,
+  ClearAllDocumentsResponse,
   DeleteDocumentResponse,
   DocumentChunksResponse,
   DocumentDetailResponse,
@@ -168,6 +169,12 @@ export function getDocumentChunks(docId: string, includeText: boolean) {
 
 export function deleteDocument(docId: string) {
   return apiFetch<DeleteDocumentResponse>(`/documents/${encodeURIComponent(docId)}`, {
+    method: 'DELETE'
+  });
+}
+
+export function clearAllDocuments() {
+  return apiFetch<ClearAllDocumentsResponse>('/documents', {
     method: 'DELETE'
   });
 }

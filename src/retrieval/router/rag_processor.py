@@ -352,6 +352,38 @@ class RAGProcessor:
         """获取文档统计信息"""
         return self.metadata_store.get_stats()
 
+    def clear_all_documents(self) -> Dict:
+        """
+        硬清空所有文档
+        - 清空内存中的向量库
+        - 删除持久化向量文件(.index/.docs)
+        - 清空并删除元数据文件
+        """
+        # 1. 统计清理前数据
+        doc_stats = self.metadata_store.clear_all(delete_storage_file=True)
+
+        # 2. 清空内存向量库
+        if self.vector_store:
+            self.clear_vector_store()
+            if self.retriever:
+                self.retriever = VectorRetriever(self.vector_store, self.embedding_provider)
+
+        # 3. 删除持久化向量文件
+        removed_vector_files = 0
+        for suffix in (".index", ".docs"):
+            path = f"{self.vector_store_path}{suffix}"
+            if os.path.exists(path):
+                os.remove(path)
+                removed_vector_files += 1
+
+        return {
+            "success": True,
+            "removed_documents": doc_stats.get("removed_total", 0),
+            "removed_active_documents": doc_stats.get("removed_active", 0),
+            "removed_deleted_documents": doc_stats.get("removed_deleted", 0),
+            "removed_vector_files": removed_vector_files
+        }
+
 def process_user_uploaded_documents(file_paths: List[str], rag_processor: RAGProcessor):
     from src.ingestion.parsers.document_processor import process_uploaded_documents
     processed_documents = process_uploaded_documents(file_paths)

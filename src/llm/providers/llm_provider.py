@@ -167,6 +167,77 @@ class LLMProvider:
             logger.error(f"LLM生成回答失败: {e}")
             raise
 
+    def stream_generate_answer(
+        self,
+        query: str,
+        contexts: List[Dict[str, Any]],
+        system_prompt: Optional[str] = None
+    ):
+        """
+        基于检索结果流式生成回答
+
+        :param query: 用户问题
+        :param contexts: 检索到的上下文列表
+        :param system_prompt: 系统提示词（可选）
+        :yield: {"type": "delta", "content": "..."} 或 {"type": "done", ...}
+        """
+        try:
+            context_text = self._build_context_text(contexts)
+            if system_prompt is None:
+                system_prompt = self._get_default_system_prompt()
+            user_prompt = self._build_user_prompt(query, context_text)
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+
+            logger.info("=" * 60)
+            logger.info("调用大模型流式请求详情:")
+            logger.info(f"模型: {self.model_name}")
+            logger.info(f"端点: {self.endpoint or 'default'}")
+            logger.info(f"温度: {self.temperature}")
+            logger.info(f"最大tokens: {self.max_tokens}")
+            logger.info(f"SSL验证: {self.ssl_verify}")
+            logger.info("=" * 60)
+
+            stream = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=True
+            )
+
+            completion_tokens = 0
+            for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    continue
+
+                delta = getattr(choice, "delta", None)
+                content = getattr(delta, "content", None) if delta else None
+                if content:
+                    completion_tokens += 1
+                    yield {"type": "delta", "content": content}
+
+                if getattr(choice, "finish_reason", None):
+                    break
+
+            yield {
+                "type": "done",
+                "model": self.model_name,
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": completion_tokens
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"LLM流式生成回答失败: {e}")
+            raise
+
     def detect_intent(self, query: str) -> Dict[str, Any]:
         """
         识别用户查询意图

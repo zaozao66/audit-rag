@@ -200,3 +200,33 @@ class DocumentMetadataStore:
             doc_id for doc_id, doc in self.documents.items()
             if doc.status == status or status is None
         ]
+
+    def clear_all(self, delete_storage_file: bool = True) -> Dict[str, int]:
+        """
+        清空所有文档元数据
+        :param delete_storage_file: 是否删除元数据存储文件
+        :return: 清理统计
+        """
+        removed_total = len(self.documents)
+        removed_active = sum(1 for d in self.documents.values() if d.status == "active")
+        removed_deleted = sum(1 for d in self.documents.values() if d.status == "deleted")
+
+        self.documents = {}
+
+        if delete_storage_file:
+            try:
+                if os.path.exists(self.storage_path):
+                    os.remove(self.storage_path)
+            except Exception as e:
+                logger.error(f"删除元数据文件失败: {e}")
+                # 文件删除失败时至少保证内存和文件内容一致
+                self.save()
+        else:
+            self.save()
+
+        logger.info(f"已清空元数据: total={removed_total}, active={removed_active}, deleted={removed_deleted}")
+        return {
+            "removed_total": removed_total,
+            "removed_active": removed_active,
+            "removed_deleted": removed_deleted
+        }

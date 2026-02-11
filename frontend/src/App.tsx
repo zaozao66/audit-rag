@@ -96,6 +96,7 @@ export default function App() {
               setIncludeDeleted(nextDeleted);
             }}
             onRefresh={loadDocs}
+            onDataChanged={refreshAll}
           />
         </section>
       ) : null}

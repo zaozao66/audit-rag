@@ -14,6 +14,7 @@ export function SearchPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [answerMd, setAnswerMd] = useState('');
+  const [hasStarted, setHasStarted] = useState(false);
   const [progressEvents, setProgressEvents] = useState<StreamProgressEvent[]>([]);
   const [currentStageMessage, setCurrentStageMessage] = useState('等待提问');
   const abortRef = useRef<AbortController | null>(null);
@@ -32,6 +33,7 @@ export function SearchPanel() {
     abortRef.current = controller;
 
     setLoading(true);
+    setHasStarted(true);
     setError('');
     setAnswerMd('');
     setProgressEvents([]);
@@ -109,7 +111,9 @@ export function SearchPanel() {
 
       {error ? <p className="error-text">{error}</p> : null}
 
-      <div className="answer-box markdown-body" dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }} />
+      {hasStarted ? (
+        <div className="answer-box markdown-body" dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }} />
+      ) : null}
     </section>
   );
 }

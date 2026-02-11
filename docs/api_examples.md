@@ -17,10 +17,13 @@
 - `GET  /health` - 健康检查
 - `POST /store` - 存储文档
 - `POST /upload_store` - 文件上传并入库
-- `POST /search` - 搜索文档
+- `POST /search_with_intent` - 意图识别搜索
+- `POST /ask` - 非流式LLM问答
+- `POST /v1/chat/completions` - OpenAI兼容问答（支持流式）
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
 - `GET  /documents` - 文档列表
+- `DELETE /documents` - 清空全部文档（真实删除）
 - `GET  /documents/<doc_id>` - 文档详情
 - `DELETE /documents/<doc_id>` - 删除文档
 - `GET  /documents/<doc_id>/chunks` - 文档分块
@@ -92,50 +95,33 @@ curl -X POST http://localhost:8000/store \
   }'
 ```
 
-### 3. 搜索文档
-
-#### 基本搜索
+### 3. 意图识别搜索
 
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:8000/search_with_intent \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "什么是人工智能",
-    "top_k": 3
+    "query": "采购审批流程有哪些制度要求？"
   }'
 ```
 
-响应示例：
-```json
-{
-  "success": true,
-  "query": "什么是人工智能",
-  "results": [
-    {
-      "score": 0.8542,
-      "text": "人工智能（Artificial Intelligence，AI）是计算机科学的一个分支，它企图了解智能的实质，并生产出一种新的能以人类智能相似的方式做出反应的智能机器。",
-      "doc_id": "doc_1",
-      "filename": "",
-      "file_type": ""
-    }
-  ],
-  "count": 1
-}
-```
-
-#### 指定自定义存储路径搜索
+### 4. 流式问答（OpenAI兼容）
 
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -N -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "机器学习",
-    "top_k": 5,
-    "store_path": "./data/my_custom_store"
+    "messages": [{"role": "user", "content": "请总结该制度的关键控制点"}],
+    "stream": true
   }'
 ```
 
-### 4. 清空向量库
+说明：
+
+- 返回为 `text/event-stream`
+- 除 `delta.content` 外，还会返回进度事件（如 `intent/retrieval/generation`）
+
+### 5. 清空向量库
 
 ```bash
 curl -X POST http://localhost:8000/clear
@@ -159,7 +145,7 @@ curl -X POST http://localhost:8000/clear \
   }'
 ```
 
-### 5. 获取系统信息
+### 6. 获取系统信息
 
 ```bash
 curl -X GET http://localhost:8000/info
@@ -193,7 +179,7 @@ curl -X GET http://localhost:8000/info
 }
 ```
 
-### 6. 上传文件并入库（带去重统计）
+### 7. 上传文件并入库（带去重统计）
 
 ```bash
 curl -X POST http://localhost:8000/upload_store \
@@ -217,34 +203,51 @@ curl -X POST http://localhost:8000/upload_store \
 }
 ```
 
-### 7. 获取文档列表
+### 8. 获取文档列表
 
 ```bash
 curl -X GET "http://localhost:8000/documents?doc_type=internal_regulation&keyword=制度&include_deleted=false"
 ```
 
-### 8. 获取单个文档详情
+### 9. 获取单个文档详情
 
 ```bash
 curl -X GET http://localhost:8000/documents/2f6ab1d2f10c1f8a
 ```
 
-### 9. 获取文档分块
+### 10. 获取文档分块
 
 ```bash
 curl -X GET "http://localhost:8000/documents/2f6ab1d2f10c1f8a/chunks?include_text=false"
 ```
 
-### 10. 删除文档
+### 11. 删除文档
 
 ```bash
 curl -X DELETE http://localhost:8000/documents/2f6ab1d2f10c1f8a
 ```
 
-### 11. 获取文档统计
+### 12. 获取文档统计
 
 ```bash
 curl -X GET http://localhost:8000/documents/stats
+```
+
+### 13. 清空全部文档（真实删除）
+
+```bash
+curl -X DELETE http://localhost:8000/documents
+```
+
+响应示例：
+```json
+{
+  "success": true,
+  "removed_documents": 12,
+  "removed_active_documents": 10,
+  "removed_deleted_documents": 2,
+  "removed_vector_files": 2
+}
 ```
 
 ## 错误处理

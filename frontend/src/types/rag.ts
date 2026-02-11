@@ -141,6 +141,15 @@ export interface DeleteDocumentResponse {
   error?: string;
 }
 
+export interface ClearAllDocumentsResponse {
+  success: boolean;
+  removed_documents: number;
+  removed_active_documents: number;
+  removed_deleted_documents: number;
+  removed_vector_files: number;
+  error?: string;
+}
+
 export interface StatsResponse {
   success: boolean;
   stats: DocumentStats;
