@@ -88,6 +88,11 @@ API端点：
 - `POST /ask` - 意图驱动LLM问答
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
+- `GET  /documents` - 文档列表（支持类型/关键字/是否含已删除过滤）
+- `GET  /documents/<doc_id>` - 文档详情
+- `DELETE /documents/<doc_id>` - 删除文档
+- `GET  /documents/<doc_id>/chunks` - 文档分块详情
+- `GET  /documents/stats` - 文档统计
 
 #### 存储文档API示例：
 

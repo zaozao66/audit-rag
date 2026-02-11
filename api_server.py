@@ -538,13 +538,28 @@ def upload_and_store_documents():
             except OSError:
                 pass
         
-        return jsonify({
-            "success": True,
-            "message": f"成功处理了 {len(uploaded_files)} 个文件，生成了 {num_processed} 个文本块",
-            "file_count": len(uploaded_files),
-            "processed_count": num_processed,
-            "chunker_used": chunker_type
-        })
+        # 构建返回结果（支持新的返回格式）
+        if isinstance(num_processed, dict):
+            # 新的返回格式（包含去重信息）
+            return jsonify({
+                "success": True,
+                "message": f"处理完成: 新增 {num_processed.get('processed', 0)} 个, 跳过 {num_processed.get('skipped', 0)} 个重复, 更新 {num_processed.get('updated', 0)} 个",
+                "file_count": len(uploaded_files),
+                "processed_count": num_processed.get('processed', 0),
+                "skipped_count": num_processed.get('skipped', 0),
+                "updated_count": num_processed.get('updated', 0),
+                "total_chunks": num_processed.get('total_chunks', 0),
+                "chunker_used": chunker_type
+            })
+        else:
+            # 兼容旧格式
+            return jsonify({
+                "success": True,
+                "message": f"成功处理了 {len(uploaded_files)} 个文件，生成了 {num_processed} 个文本块",
+                "file_count": len(uploaded_files),
+                "processed_count": num_processed,
+                "chunker_used": chunker_type
+            })
         
     except Exception as e:
         logger.error(f"上传并存储文档时出错: {e}")
@@ -764,6 +779,9 @@ def get_info():
             vector_count = 0
             vector_store_status = "not loaded or empty"
         
+        # 获取文档统计
+        doc_stats = rag_processor.get_document_stats() if hasattr(rag_processor, 'get_document_stats') else {}
+        
         return jsonify({
             "status": "running",
             "vector_store_status": vector_store_status,
@@ -771,11 +789,130 @@ def get_info():
             "dimension": rag_processor.dimension or 1024,
             "chunker_type": rag_processor.chunker_type,
             "embedding_model": rag_processor.embedding_provider.model_name if hasattr(rag_processor.embedding_provider, 'model_name') else 'unknown',
-            "rerank_enabled": rag_processor.rerank_provider is not None
+            "rerank_enabled": rag_processor.rerank_provider is not None,
+            "document_stats": doc_stats
         })
     except Exception as e:
         logger.error(f"获取系统信息时出错: {e}")
         return jsonify({"error": f"获取系统信息失败: {str(e)}"}), 500
+
+
+# ========== 文档管理接口 ==========
+
+@app.route('/documents', methods=['GET'])
+def list_documents():
+    """获取已上传文档列表"""
+    global rag_processor
+    try:
+        # 获取过滤参数
+        doc_type = request.args.get('doc_type')
+        keyword = request.args.get('keyword')
+        include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
+        
+        # 初始化处理器
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor()
+        
+        documents = rag_processor.list_documents(doc_type=doc_type, keyword=keyword, include_deleted=include_deleted)
+        
+        return jsonify({
+            "success": True,
+            "count": len(documents),
+            "documents": documents
+        })
+        
+    except Exception as e:
+        logger.error(f"获取文档列表失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/documents/<doc_id>', methods=['GET'])
+def get_document_detail(doc_id):
+    """获取单个文档详情"""
+    global rag_processor
+    try:
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor()
+        
+        detail = rag_processor.get_document_detail(doc_id)
+        
+        if not detail:
+            return jsonify({"error": "文档不存在"}), 404
+        
+        return jsonify({
+            "success": True,
+            "document": detail
+        })
+        
+    except Exception as e:
+        logger.error(f"获取文档详情失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/documents/<doc_id>', methods=['DELETE'])
+def delete_document(doc_id):
+    """删除指定文档"""
+    global rag_processor
+    try:
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor()
+        
+        result = rag_processor.delete_document(doc_id)
+        
+        if not result['success']:
+            return jsonify(result), 404
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"删除文档失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/documents/<doc_id>/chunks', methods=['GET'])
+def get_document_chunks(doc_id):
+    """获取文档的分块列表"""
+    global rag_processor
+    try:
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor()
+        
+        # 可选参数：是否包含完整文本
+        include_text = request.args.get('include_text', 'true').lower() == 'true'
+        
+        result = rag_processor.get_document_chunks(doc_id, include_text=include_text)
+        
+        if "error" in result:
+            return jsonify(result), 404
+        
+        return jsonify({
+            "success": True,
+            "data": result
+        })
+        
+    except Exception as e:
+        logger.error(f"获取分块列表失败: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/documents/stats', methods=['GET'])
+def get_document_stats():
+    """获取文档统计信息"""
+    global rag_processor
+    try:
+        if rag_processor is None:
+            rag_processor = initialize_rag_processor()
+        
+        stats = rag_processor.get_document_stats()
+        
+        return jsonify({
+            "success": True,
+            "stats": stats
+        })
+        
+    except Exception as e:
+        logger.error(f"获取统计信息失败: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 def run_server(host='0.0.0.0', port=8000):

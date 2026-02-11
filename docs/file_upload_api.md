@@ -29,12 +29,22 @@ RAG系统现在支持通过HTTP接口直接上传文件进行处理和存储。�
 ```json
 {
   "success": true,
-  "message": "成功处理了 2 个文件，生成了 5 个文本块",
+  "message": "处理完成: 新增 2 个, 跳过 1 个重复, 更新 0 个",
   "file_count": 2,
-  "processed_count": 5,
+  "processed_count": 2,
+  "skipped_count": 1,
+  "updated_count": 0,
+  "total_chunks": 18,
   "chunker_used": "smart"
 }
 ```
+
+说明：
+
+- `processed_count`：本次新增入库的文档数
+- `skipped_count`：因内容去重被跳过的文档数
+- `updated_count`：命中已有记录并完成更新的文档数
+- `total_chunks`：当前系统中累计分块总数（活跃文档）
 
 错误响应：
 
@@ -98,9 +108,10 @@ for file_tuple in files:
 2. 临时存储：将上传的文件保存到临时位置
 3. 格式识别：根据文件扩展名识别文件类型
 4. 内容提取：使用document_processor.py处理不同格式的文件
-5. 文档分块：使用document_chunker.py对文档进行分块
-6. 向量化：使用嵌入提供者将文本块转换为向量
-7. 存储：将向量和文档信息存储到向量库
+5. 文档去重：按文档内容计算哈希并识别重复内容
+6. 文档分块：使用document_chunker.py对文档进行分块
+7. 向量化：使用嵌入提供者将文本块转换为向量
+8. 存储：将向量和文档信息存储到向量库，并同步写入文档元数据
 
 ## 注意事项
 

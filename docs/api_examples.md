@@ -16,9 +16,15 @@
 
 - `GET  /health` - 健康检查
 - `POST /store` - 存储文档
+- `POST /upload_store` - 文件上传并入库
 - `POST /search` - 搜索文档
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
+- `GET  /documents` - 文档列表
+- `GET  /documents/<doc_id>` - 文档详情
+- `DELETE /documents/<doc_id>` - 删除文档
+- `GET  /documents/<doc_id>/chunks` - 文档分块
+- `GET  /documents/stats` - 文档统计
 
 ## 详细使用示例
 
@@ -165,8 +171,80 @@ curl -X GET http://localhost:8000/info
   "status": "running",
   "vector_store_status": "loaded",
   "vector_count": 10,
-  "dimension": 1024
+  "dimension": 1024,
+  "document_stats": {
+    "total_documents": 12,
+    "active_documents": 10,
+    "deleted_documents": 2,
+    "total_chunks": 268,
+    "total_size_bytes": 1532456,
+    "total_size_mb": 1.46,
+    "by_type": {
+      "internal_regulation": {
+        "count": 6,
+        "chunks": 180
+      },
+      "external_report": {
+        "count": 4,
+        "chunks": 88
+      }
+    }
+  }
 }
+```
+
+### 6. 上传文件并入库（带去重统计）
+
+```bash
+curl -X POST http://localhost:8000/upload_store \
+  -F "files=@/path/to/审计报告.docx" \
+  -F "files=@/path/to/制度汇编.pdf" \
+  -F "chunker_type=smart" \
+  -F "doc_type=internal_regulation"
+```
+
+响应示例：
+```json
+{
+  "success": true,
+  "message": "处理完成: 新增 2 个, 跳过 1 个重复, 更新 0 个",
+  "file_count": 3,
+  "processed_count": 2,
+  "skipped_count": 1,
+  "updated_count": 0,
+  "total_chunks": 268,
+  "chunker_used": "smart"
+}
+```
+
+### 7. 获取文档列表
+
+```bash
+curl -X GET "http://localhost:8000/documents?doc_type=internal_regulation&keyword=制度&include_deleted=false"
+```
+
+### 8. 获取单个文档详情
+
+```bash
+curl -X GET http://localhost:8000/documents/2f6ab1d2f10c1f8a
+```
+
+### 9. 获取文档分块
+
+```bash
+curl -X GET "http://localhost:8000/documents/2f6ab1d2f10c1f8a/chunks?include_text=false"
+```
+
+### 10. 删除文档
+
+```bash
+curl -X DELETE http://localhost:8000/documents/2f6ab1d2f10c1f8a
+```
+
+### 11. 获取文档统计
+
+```bash
+curl -X GET http://localhost:8000/documents/stats
 ```
 
 ## 错误处理

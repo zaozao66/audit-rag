@@ -2,7 +2,7 @@ import faiss
 import numpy as np
 import logging
 import pickle
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -124,3 +124,93 @@ class VectorStore:
         # 兼容历史数据：内积模式下默认视为已归一化
         if self.metric_type == faiss.METRIC_INNER_PRODUCT:
             self.is_normalized = True
+    
+    def get_document_chunks(self, doc_id: str) -> List[Dict]:
+        """
+        获取指定文档的所有分块
+        :param doc_id: 文档ID
+        :return: 分块信息列表
+        """
+        chunks = []
+        for idx, doc in enumerate(self.documents):
+            if doc.get('doc_id') == doc_id:
+                chunk_info = {
+                    'chunk_index': idx,
+                    'chunk_id': doc.get('chunk_id', f'{doc_id}_chunk_{idx}'),
+                    'text': doc.get('text', ''),
+                    'text_preview': doc.get('text', '')[:200] + '...' if len(doc.get('text', '')) > 200 else doc.get('text', ''),
+                    'char_count': len(doc.get('text', '')),
+                    'metadata': {
+                        'filename': doc.get('filename', ''),
+                        'doc_type': doc.get('doc_type', ''),
+                        'page_nos': doc.get('page_nos', []),
+                        'header': doc.get('header', ''),
+                        'section_path': doc.get('section_path', [])
+                    }
+                }
+                chunks.append(chunk_info)
+        return chunks
+    
+    def get_chunk_by_id(self, chunk_id: str) -> Optional[Dict]:
+        """
+        通过chunk_id获取单个分块
+        :param chunk_id: 分块ID
+        :return: 分块信息
+        """
+        for doc in self.documents:
+            if doc.get('chunk_id') == chunk_id:
+                return doc
+        return None
+    
+    def remove_document_chunks(self, doc_id: str) -> int:
+        """
+        删除指定文档的所有chunks
+        注意：Faiss不支持直接删除，需要重建索引
+        :param doc_id: 文档ID
+        :return: 删除的chunk数量
+        """
+        # 找到需要删除的索引
+        indices_to_remove = []
+        for idx, doc in enumerate(self.documents):
+            if doc.get('doc_id') == doc_id:
+                indices_to_remove.append(idx)
+        
+        if not indices_to_remove:
+            return 0
+        
+        # 重建索引（排除要删除的文档）
+        self._rebuild_index(indices_to_remove)
+        return len(indices_to_remove)
+    
+    def _rebuild_index(self, exclude_indices: List[int]):
+        """
+        重建Faiss索引（排除指定索引）
+        注意：这会丢失原始向量，需要从原始文档重新生成
+        这里仅做标记删除，实际重建需要重新处理文档
+        """
+        # 保留的文档
+        keep_indices = [i for i in range(len(self.documents)) if i not in exclude_indices]
+        
+        if not keep_indices:
+            # 全部删除，重置
+            self.index = faiss.IndexFlatIP(self.dimension)
+            self.documents = []
+            logger.info("向量库已清空")
+            return
+        
+        # 由于Faiss不支持删除，这里采用标记删除策略
+        # 将被删除的文档文本置空，保留索引结构
+        for idx in exclude_indices:
+            if idx < len(self.documents):
+                self.documents[idx]['text'] = ''
+                self.documents[idx]['status'] = 'deleted'
+        
+        logger.info(f"已标记删除 {len(exclude_indices)} 个chunks")
+    
+    def get_total_count(self) -> int:
+        """获取总文档数"""
+        return len(self.documents)
+    
+    def get_active_count(self) -> int:
+        """获取有效文档数（未删除）"""
+        return sum(1 for doc in self.documents if doc.get('status') != 'deleted')
