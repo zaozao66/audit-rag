@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from typing import Dict, Any, List
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_from_directory
 from werkzeug.utils import secure_filename
 
 # 添加src目录到Python路径
@@ -51,8 +51,12 @@ logger.setLevel(logging.INFO)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-# 创建Flask应用
-app = Flask(__name__)
+# 前端构建产物目录（由 Vite 输出）
+BASE_DIR = os.path.dirname(__file__)
+FRONTEND_DIST_DIR = os.path.join(BASE_DIR, 'frontend', 'dist')
+
+# 创建Flask应用（静态文件指向前端构建目录）
+app = Flask(__name__, static_folder=FRONTEND_DIST_DIR, static_url_path='/')
 
 # 全局变量存储RAG处理器实例
 rag_processor = None
@@ -380,18 +384,77 @@ def _stream_chat_completion(query: str, top_k: int):
     """
     try:
         global rag_processor
-        
-        # 执行检索和生成
-        result = rag_processor.search_with_llm_answer(query, top_k=top_k)
-        answer = result['answer']
-        
-        # 将完整答案拆分成chunks进行流式传输
-        # 模拟流式效果：每次发送若干字符
-        chunk_size = 20  # 每个chunk包含的字符数
-        
+
+        def _progress(stage: str, status: str, message: str, extra: Dict[str, Any] = None):
+            payload = {
+                "event": "progress",
+                "stage": stage,
+                "status": status,
+                "message": message
+            }
+            if extra:
+                payload.update(extra)
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        # 1) 意图识别阶段
+        yield _progress("intent", "running", "意图识别中")
+        params = rag_processor.router.get_routed_params(
+            query,
+            default_top_k=top_k,
+            use_rerank=True,
+            rerank_top_k=10
+        )
+        yield _progress(
+            "intent",
+            "done",
+            f"意图识别完成: {params.get('intent', 'unknown')}",
+            {
+                "intent": params.get("intent", "unknown"),
+                "top_k": params.get("top_k", top_k),
+                "use_rerank": params.get("use_rerank", False)
+            }
+        )
+
+        # 2) 向量检索阶段
+        yield _progress("retrieval", "running", "向量库匹配中")
+        search_results = rag_processor.search(
+            query,
+            top_k=params.get("top_k", top_k),
+            use_rerank=params.get("use_rerank", True),
+            rerank_top_k=params.get("rerank_top_k", 10),
+            doc_types=params.get("doc_types")
+        )
+        yield _progress("retrieval", "done", f"检索完成，命中 {len(search_results)} 条结果", {"hits": len(search_results)})
+
+        # 3) LLM 生成阶段
+        if not rag_processor.llm_provider:
+            raise ValueError("LLM功能未启用，请在初始化时传入llm_provider")
+
+        contexts = []
+        for res in search_results:
+            doc = res['document']
+            contexts.append({
+                'text': doc['text'],
+                'title': doc.get('title', ''),
+                'filename': doc.get('filename', ''),
+                'doc_type': doc.get('doc_type', ''),
+                'score': res['score']
+            })
+
+        yield _progress("generation", "running", "LLM回答生成中")
+        llm_result = rag_processor.llm_provider.generate_answer(query, contexts)
+        answer = llm_result.get('answer', '')
+        yield _progress(
+            "generation",
+            "done",
+            "回答生成完成，开始流式返回",
+            {"model": llm_result.get("model", "unknown")}
+        )
+
+        # 4) 逐字流式输出回答
+        chunk_size = 3
         for i in range(0, len(answer), chunk_size):
             chunk_content = answer[i:i + chunk_size]
-            
             chunk_data = {
                 "choices": [{
                     "delta": {
@@ -401,10 +464,8 @@ def _stream_chat_completion(query: str, top_k: int):
                     "finish_reason": None
                 }]
             }
-            
             yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
-        
-        # 发送结束标记
+
         final_chunk = {
             "choices": [{
                 "delta": {},
@@ -414,7 +475,7 @@ def _stream_chat_completion(query: str, top_k: int):
         }
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
-        
+
     except Exception as e:
         logger.error(f"流式响应生成失败: {e}", exc_info=True)
         error_data = {
@@ -913,6 +974,28 @@ def get_document_stats():
     except Exception as e:
         logger.error(f"获取统计信息失败: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    """
+    托管前端静态资源（SPA）
+    - 命中实际文件时返回文件
+    - 其他前端路由回退到 index.html
+    """
+    if not os.path.isdir(FRONTEND_DIST_DIR):
+        return jsonify({"error": "前端资源不存在，请先执行 frontend 构建"}), 404
+
+    if path:
+        target = os.path.join(FRONTEND_DIST_DIR, path)
+        if os.path.isfile(target):
+            return send_from_directory(FRONTEND_DIST_DIR, path)
+
+    index_path = os.path.join(FRONTEND_DIST_DIR, 'index.html')
+    if os.path.isfile(index_path):
+        return send_from_directory(FRONTEND_DIST_DIR, 'index.html')
+    return jsonify({"error": "前端入口文件不存在，请重新构建前端"}), 404
 
 
 def run_server(host='0.0.0.0', port=8000):

@@ -27,4 +27,22 @@ echo "  GET  /health  - 健康检查"
 echo "  GET  /info    - 系统信息"
 echo ""
 
+# 构建前端静态资源（若存在前端工程）
+if [ -d "frontend" ]; then
+    echo "检测到 frontend 工程，开始构建前端..."
+    if ! command -v npm >/dev/null 2>&1; then
+        echo "错误: 未找到 npm，请先安装 Node.js/npm"
+        exit 1
+    fi
+
+    cd frontend || exit 1
+    npm run build || {
+        echo "前端构建失败，已中止启动"
+        exit 1
+    }
+    cd .. || exit 1
+    echo "前端构建完成"
+    echo ""
+fi
+
 python3 api_server.py --host 0.0.0.0 --port $PORT

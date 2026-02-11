@@ -33,3 +33,9 @@ api_server.pid
 data/vector_store_*.docs
 data/vector_store_*.index
 *.pid
+
+# Frontend (React + Vite)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
