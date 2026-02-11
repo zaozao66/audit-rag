@@ -4,6 +4,7 @@ import type { DocumentChunksData, DocumentRecord } from '../types/rag';
 
 interface DocumentsPanelProps {
   documents: DocumentRecord[];
+  docTypeOptions: string[];
   loading: boolean;
   docType: string;
   keyword: string;
@@ -15,6 +16,7 @@ interface DocumentsPanelProps {
 
 export function DocumentsPanel({
   documents,
+  docTypeOptions,
   loading,
   docType,
   keyword,
@@ -101,11 +103,17 @@ export function DocumentsPanel({
       <div className="form-grid">
         <label>
           doc_type
-          <input
+          <select
             value={docType}
             onChange={(e) => onFilterChange({ docType: e.target.value, keyword, includeDeleted })}
-            placeholder="例如 internal_regulation"
-          />
+          >
+            <option value="">全部类型</option>
+            {docTypeOptions.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           keyword

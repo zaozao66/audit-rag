@@ -4,13 +4,11 @@
 
 ```
 audit-rag/
-├── main.py                 # 主程序入口（命令行接口）
 ├── api_server.py           # HTTP API服务器
 ├── start_api.sh            # 启动API（含前端构建）
 ├── start_api_no_build.sh   # 启动API（不构建前端）
 ├── start_api_no_build_daemon.sh   # Linux后台启动（不构建前端）
 ├── start_api_no_build_windows.bat # Windows启动（不构建前端）
-├── cli_app.py              # 命令行接口应用程序
 ├── config.json             # 配置文件
 ├── requirements.txt        # 依赖包列表
 ├── src/                    # 源代码分层结构
@@ -81,60 +79,7 @@ audit-rag/
 
 ## 使用方法
 
-### 1. 命令行接口
-
-#### 存储文档
-
-将文档存储到向量库：
-
-```bash
-python main.py store --files /path/to/doc1.pdf /path/to/doc2.docx --chunker-type smart
-```
-
-参数说明：
-- `--files`: 文件路径列表
-- `--chunker-type`: 分块器类型，可选：
-  - `default`: 普通分块逻辑
-  - `regulation`: 制度文件分块逻辑（适用于法规、内部制度等）
-  - `audit_report`: 审计报告分块逻辑（适用于各类审计报告）
-  - `smart`: (推荐) 智能识别文档类型并选择最优逻辑
-- `--store-path`: 自定义向量库存储路径
-
-#### 搜索文档
-
-从向量库中搜索相关文档：
-
-```bash
-python main.py search --query "你的查询内容"
-```
-
-交互式搜索模式：
-
-```bash
-python main.py search
-```
-
-指定自定义向量库路径：
-
-```bash
-python main.py search --query "查询内容" --store-path ./my_custom_store
-```
-
-#### 清空向量库
-
-清空现有向量库：
-
-```bash
-python main.py clear
-```
-
-指定自定义向量库路径：
-
-```bash
-python main.py clear --store-path ./my_custom_store
-```
-
-### 2. HTTP API接口
+### 1. HTTP API接口
 
 启动HTTP API服务器：
 

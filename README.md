@@ -1,6 +1,6 @@
-# RAG系统
+# Audit RAG
 
-这是一个基于文本嵌入API的RAG（检索增强生成）系统，能够处理PDF、DOCX和TXT格式的文档，并将其转换为向量存储在Faiss索引中，以支持语义搜索。
+这是一个面向审计/合规场景的 RAG 系统，支持文档入库、检索、意图识别、LLM 问答（含流式响应）和文档生命周期管理。
 
 ## 功能特性
 
@@ -13,7 +13,7 @@
 - **重排序增强**：集成rerank模型提升相关性
 - **LLM智能问答**：基于意图识别和检索结果生成精准回答
 - **持久化向量库**：支持增量上传与自动加载
-- **HTTP API接口**：提供现代化的RESTful API，支持智能问答与搜索
+- **HTTP API接口**：提供 RESTful API，支持流式问答与文档管理
 
 ## 安装依赖
 
@@ -35,39 +35,7 @@ pip install -r requirements.txt
 
 ## 使用方法
 
-### 命令行接口
-
-#### 存储文档到向量库
-
-```bash
-# 存储单个或多个文档
-python main.py store --files /path/to/doc1.pdf /path/to/doc2.docx
-
-# 指定自定义向量库存储路径
-python main.py store --files /path/to/doc1.pdf --store-path ./my_custom_store
-```
-
-#### 搜索文档
-
-```bash
-# 直接搜索
-python main.py search --query "你的查询内容"
-
-# 交互式搜索（可连续提问）
-python main.py search
-
-# 指定自定义向量库路径
-python main.py search --query "查询内容" --store-path ./my_custom_store
-```
-
-#### 清空向量库
-
-```bash
-# 清空向量库
-python main.py clear
-```
-
-### HTTP API接口
+### API 接口
 
 启动HTTP API服务器：
 
@@ -83,6 +51,9 @@ python main.py clear
 
 # Linux 后台启动（不构建前端）
 ./start_api_no_build_daemon.sh 8000 production
+
+# Windows 启动（不构建前端）
+start_api_no_build_windows.bat 8000 production
 ```
 
 API端点：
@@ -102,7 +73,22 @@ API端点：
 - `GET  /documents/<doc_id>/chunks` - 文档分块详情
 - `GET  /documents/stats` - 文档统计
 
-#### 存储文档API示例：
+#### 流式问答示例（推荐）
+
+```bash
+curl -N -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role":"user","content":"请总结审计风险重点"}],
+    "stream": true
+  }'
+```
+
+说明：
+- 返回类型为 `text/event-stream`
+- 会先返回阶段进度事件（`intent` / `retrieval` / `generation`），再返回 `delta.content` 文本分片
+
+#### 存储文档API示例
 
 ```bash
 curl -X POST http://localhost:8000/store \
@@ -133,21 +119,23 @@ curl -X POST http://localhost:8000/search_with_intent \
 curl -X POST http://localhost:8000/clear
 ```
 
-## 项目结构
+## 项目结构（当前）
 
 ```
 audit-rag/
-├── main.py                 # 主程序入口（命令行接口）
 ├── api_server.py           # HTTP API服务器
 ├── start_api.sh            # 启动API（含前端构建）
 ├── start_api_no_build.sh   # 启动API（不构建前端）
 ├── start_api_no_build_daemon.sh   # Linux后台启动（不构建前端）
 ├── start_api_no_build_windows.bat # Windows启动（不构建前端）
-├── cli_app.py              # 命令行接口应用程序
 ├── config.json             # 配置文件
 ├── requirements.txt        # 依赖包列表
 ├── frontend/               # React + Vite 前端工程（构建产物由后端托管）
 ├── src/                    # 源代码分层结构
+│   ├── api/                # API层（第一阶段重构）
+│   │   ├── app.py          # Flask app 工厂与蓝图注册
+│   │   ├── routes/         # 按领域拆分路由（chat/documents/storage/system）
+│   │   └── services/       # API 服务层（RAGService 生命周期管理）
 │   ├── core/               # 核心层：抽象定义与组件工厂 (Factory Pattern)
 │   │   ├── factory.py      # 组件创建工厂
 │   │   ├── interfaces.py   # 接口契约定义
@@ -164,7 +152,7 @@ audit-rag/
 │   ├── llm/                # 生成层：大语言模型集成
 │   │   └── providers/      # 各类模型厂商 (OpenAI/DeepSeek 等) 接入
 │   └── utils/              # 工具层：基础辅助功能
-└── data/                   # 数据目录 (存放持久化 Faiss 索引及文档映射)
+└── data/                   # 本地数据目录（已默认忽略，不纳入 Git）
 ```
 
 ## 技术架构

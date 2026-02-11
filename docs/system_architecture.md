@@ -1,140 +1,48 @@
-# RAG系统架构说明
+# RAG系统架构说明（API-Only）
 
-## 系统架构图
+## 总体结构
 
-### 命令行接口架构
-```
-                    +------------------+
-                    |   Command Line   |
-                    |      Interface   |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |    cli_app.py    |
-                    |  (Main Controller)|
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |   rag_processor  |
-                    |      .py         |
-                    +--------+---------+
-                             |
-        +--------------------+--------------------+
-        |                    |                    |
-+-------v--------+  +--------v---------+  +-------v--------+
-|document_chunker|  |embedding_providers|  |vector_store.py |
-|     .py        |  |     .py          |  |                |
-+-------+--------+  +--------+---------+  +-------+--------+
-        |                    |                    |
-+-------v--------+  +--------v---------+  +-------v--------+
-|document_processor| |API调用            |  |Faiss向量索引   |
-|     .py        |  |                |  |                |
-+----------------+  +----------------+  +----------------+
+```text
+Client (Web/Curl)
+   |
+   v
+api_server.py
+   |
+   v
+src/api/app.py (Flask App Factory)
+   |
+   +--> src/api/routes/system.py
+   +--> src/api/routes/documents.py
+   +--> src/api/routes/storage.py
+   +--> src/api/routes/chat.py
+             |
+             v
+      src/api/services/rag_service.py
+             |
+             v
+      src/core + src/ingestion + src/indexing + src/retrieval + src/llm
 ```
 
-### HTTP API接口架构
+## 典型请求流程
+
+1. 客户端发送 HTTP 请求。
+2. Flask 路由接收并做参数校验。
+3. `RAGService` 统一管理处理器与依赖初始化。
+4. 进入检索/向量/LLM/文档模块执行业务逻辑。
+5. 返回 JSON 或 SSE 流式响应（问答场景）。
+
+## 设计要点
+
+- 仅保留 API 入口，避免 CLI 与 API 双通道维护成本。
+- 路由与服务解耦，便于后续按领域继续拆分。
+- 聊天接口支持阶段事件与 token 流式输出，改善等待体验。
+- 文档管理支持真实删除与统计查询。
+
+## 启动
+
+```bash
+./start_api.sh
+./start_api_no_build.sh
+./start_api_no_build_daemon.sh 8000 production
+start_api_no_build_windows.bat 8000 production
 ```
-                    +------------------+
-                    |      Client      |
-                    |   (curl, etc.)   |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |  api_server.py   |
-                    |  (Flask Server)  |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |   rag_processor  |
-                    |      .py         |
-                    +--------+---------+
-                             |
-        +--------------------+--------------------+
-        |                    |                    |
-+-------v--------+  +--------v---------+  +-------v--------+
-|document_chunker|  |embedding_providers|  |vector_store.py |
-|     .py        |  |     .py          |  |                |
-+-------+--------+  +--------+---------+  +-------+--------+
-        |                    |                    |
-+-------v--------+  +--------v---------+  +-------v--------+
-|document_processor| |API调用            |  |Faiss向量索引   |
-|     .py        |  |                |  |                |
-+----------------+  +----------------+  +----------------+
-```
-
-## 数据流向
-
-### 命令行存储流程 (CLI store)
-1. **CLI输入**: 用户通过命令行输入存储命令和文件路径
-2. **配置加载**: 从config.json加载系统配置
-3. **文档处理**: document_processor.py解析不同格式的文档
-4. **文档分块**: document_chunker.py将文档切分为小块
-5. **向量嵌入**: embedding_providers.py调用API生成向量
-6. **向量存储**: vector_store.py将向量和文档信息存储到Faiss索引
-7. **持久化**: 保存向量库到磁盘
-
-### HTTP API存储流程 (API store)
-1. **HTTP请求**: 客户端发送POST请求到/store端点
-2. **请求解析**: api_server.py解析JSON请求体
-3. **配置加载**: 从config.json加载系统配置
-4. **文档处理**: document_processor.py处理文档数据
-5. **文档分块**: document_chunker.py将文档切分为小块
-6. **向量嵌入**: embedding_providers.py调用API生成向量
-7. **向量存储**: vector_store.py将向量和文档信息存储到Faiss索引
-8. **持久化**: 保存向量库到磁盘
-9. **响应返回**: 返回JSON响应给客户端
-
-### 搜索流程 (CLI/API)
-1. **输入接收**: 从CLI参数或HTTP请求获取搜索查询
-2. **向量库加载**: 从磁盘加载已保存的向量库
-3. **查询嵌入**: 将用户查询转换为向量
-4. **相似性搜索**: 在Faiss索引中查找最相似的向量
-5. **结果返回**: 返回匹配的文档片段和相似度分数
-
-## 核心组件说明
-
-### cli_app.py (命令行接口)
-- 解析命令行参数
-- 调度各个功能模块
-- 提供用户交互界面
-
-### api_server.py (HTTP API服务器)
-- 基于Flask的Web服务器
-- 提供RESTful API端点
-- 处理HTTP请求和响应
-- 支持存储、搜索、清除等功能
-
-### rag_processor.py (RAG处理器)
-- 协调整个RAG流程
-- 管理向量库的生命周期
-- 实现文档处理和搜索逻辑
-- 同时服务于CLI和API接口
-
-### document_processor.py (文档处理器)
-- 支持多种文档格式（PDF, DOCX, TXT）
-- 统一文档内容提取接口
-- 处理文档数据结构
-
-### document_chunker.py (文档分块器)
-- 智能文档分块算法
-- 保持语义完整性
-- 处理块间重叠
-
-### embedding_providers.py (嵌入提供者)
-- text-embedding-v4 API封装
-- 向量生成服务
-
-### vector_store.py (向量存储)
-- Faiss向量索引管理
-- 向量相似性搜索
-- 数据持久化功能
-
-## 设计特点
-
-1. **双接口支持**: 同时提供命令行和HTTP API接口
-2. **模块化设计**: 各组件职责单一，易于维护和扩展
-3. **松耦合**: 组件之间通过明确定义的接口通信
-4. **可配置**: 通过config.json灵活配置系统参数
-5. **持久化**: 支持向量库的保存和加载
-6. **可扩展**: 易于添加新的文档格式或嵌入提供者
-7. **统一核心**: CLI和API共享相同的RAG处理逻辑

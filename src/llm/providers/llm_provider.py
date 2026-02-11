@@ -24,7 +24,8 @@ class LLMProvider:
         endpoint: str = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
-        ssl_verify: bool = True
+        ssl_verify: bool = True,
+        request_timeout: float = 60.0
     ):
         """
         初始化LLM提供者
@@ -42,6 +43,7 @@ class LLMProvider:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.ssl_verify = ssl_verify
+        self.request_timeout = request_timeout
         
         # 初始化OpenAI客户端
         client_kwargs = {
@@ -60,7 +62,9 @@ class LLMProvider:
             
         self.client = OpenAI(**client_kwargs)
         
-        logger.info(f"LLM提供者初始化完成 - 模型: {model_name}, 端点: {endpoint or 'default'}, SSL验证: {ssl_verify}")
+        logger.info(
+            f"LLM提供者初始化完成 - 模型: {model_name}, 端点: {endpoint or 'default'}, SSL验证: {ssl_verify}, 超时: {request_timeout}s"
+        )
     
     def generate_answer(
         self,
@@ -114,7 +118,8 @@ class LLMProvider:
                     model=self.model_name,
                     messages=messages,
                     temperature=self.temperature,
-                    max_tokens=self.max_tokens
+                    max_tokens=self.max_tokens,
+                    timeout=self.request_timeout
                 )
             except Exception as api_error:
                 logger.error("=" * 60)
@@ -206,7 +211,8 @@ class LLMProvider:
                 messages=messages,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                stream=True
+                stream=True,
+                timeout=self.request_timeout
             )
 
             completion_tokens = 0
@@ -282,7 +288,8 @@ class LLMProvider:
                         {"role": "system", "content": "你是一个严格只返回JSON格式的后端助手。"},
                         {"role": "user", "content": intent_prompt}
                     ],
-                    temperature=0.1
+                    temperature=0.1,
+                    timeout=self.request_timeout
                 )
             except Exception as api_error:
                 logger.error("=" * 60)
@@ -426,6 +433,7 @@ def create_llm_provider(config: Dict[str, Any]) -> LLMProvider:
     temperature = config.get('temperature', 0.7)
     max_tokens = config.get('max_tokens', 2000)
     ssl_verify = config.get('ssl_verify', True)
+    request_timeout = config.get('request_timeout', 60.0)
     
     if not api_key:
         raise ValueError("LLM API密钥未配置")
@@ -438,5 +446,6 @@ def create_llm_provider(config: Dict[str, Any]) -> LLMProvider:
         endpoint=endpoint,
         temperature=temperature,
         max_tokens=max_tokens,
-        ssl_verify=ssl_verify
+        ssl_verify=ssl_verify,
+        request_timeout=request_timeout
     )

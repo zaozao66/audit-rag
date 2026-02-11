@@ -86,6 +86,7 @@ export default function App() {
           <UploadPanel onUploaded={refreshAll} />
           <DocumentsPanel
             documents={documents}
+            docTypeOptions={Object.keys(stats?.by_type ?? {})}
             loading={loadingDocs}
             docType={docType}
             keyword={keyword}
