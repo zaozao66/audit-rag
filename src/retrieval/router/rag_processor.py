@@ -226,16 +226,9 @@ class RAGProcessor:
             doc_types=params['doc_types']
         )
         
-        contexts = []
-        for res in search_results:
-            doc = res['document']
-            contexts.append({
-                'text': doc['text'],
-                'title': doc.get('title', ''),
-                'filename': doc.get('filename', ''),
-                'doc_type': doc.get('doc_type', ''),
-                'score': res['score']
-            })
+        context_pack = self.build_contexts_and_citations(search_results)
+        contexts = context_pack['contexts']
+        citations = context_pack['citations']
             
         llm_result = self.llm_provider.generate_answer(query, contexts)
         
@@ -247,9 +240,52 @@ class RAGProcessor:
             'contexts': contexts,
             'contexts_used': len(contexts),
             'search_results': search_results,
+            'citations': citations,
             'llm_usage': llm_result.get('usage', {}),
             'model': llm_result.get('model', '')
         }
+
+    def build_contexts_and_citations(self, search_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """根据检索结果构建LLM上下文与可回溯引用信息"""
+        contexts: List[Dict[str, Any]] = []
+        citations: List[Dict[str, Any]] = []
+
+        for idx, res in enumerate(search_results, 1):
+            doc = res.get('document', {})
+            source_id = f"S{idx}"
+            raw_text = doc.get('text', '') or ''
+            text_preview = raw_text[:220] + ('...' if len(raw_text) > 220 else '')
+
+            contexts.append({
+                'source_id': source_id,
+                'text': raw_text,
+                'title': doc.get('title', ''),
+                'filename': doc.get('filename', ''),
+                'doc_type': doc.get('doc_type', ''),
+                'score': res.get('score', 0.0),
+                'doc_id': doc.get('doc_id', ''),
+                'chunk_id': doc.get('chunk_id', ''),
+                'page_nos': doc.get('page_nos', []),
+                'header': doc.get('header', ''),
+                'section_path': doc.get('section_path', []),
+            })
+
+            citations.append({
+                'source_id': source_id,
+                'doc_id': doc.get('doc_id', ''),
+                'chunk_id': doc.get('chunk_id', ''),
+                'filename': doc.get('filename', ''),
+                'title': doc.get('title', ''),
+                'doc_type': doc.get('doc_type', ''),
+                'score': res.get('score', 0.0),
+                'original_score': res.get('original_score'),
+                'text_preview': text_preview,
+                'page_nos': doc.get('page_nos', []),
+                'header': doc.get('header', ''),
+                'section_path': doc.get('section_path', []),
+            })
+
+        return {'contexts': contexts, 'citations': citations}
 
     def save_vector_store(self, filepath: str = None):
         if not self.vector_store: return

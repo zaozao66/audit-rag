@@ -372,6 +372,57 @@ select {
   background: transparent;
 }
 
+.markdown-body .cite-ref {
+  color: #0f5f45;
+  font-weight: 700;
+  text-decoration: none;
+  margin: 0 2px;
+}
+
+.markdown-body .cite-ref:hover {
+  text-decoration: underline;
+}
+
+.citation-board {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.citation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.citation-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.citation-card header,
+.citation-card footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.citation-card header span {
+  font-weight: 700;
+  color: #0f5f45;
+}
+
+.citation-card p {
+  margin: 0;
+}
+
+.citation-card small {
+  color: var(--muted);
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

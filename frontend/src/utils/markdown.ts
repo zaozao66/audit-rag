@@ -25,6 +25,7 @@ function inlineMarkdown(input: string): string {
     const safeHref = sanitizeHref(href);
     return `<a href="${safeHref}" target="_blank" rel="noreferrer">${label}</a>`;
   });
+  text = text.replace(/\[(S\d+)\]/g, '<a class="cite-ref" href="#cite-$1">[$1]</a>');
 
   return text;
 }
@@ -85,9 +86,25 @@ export function renderMarkdownToHtml(markdown: string): string {
 
     if (/^\s*\d+\.\s+/.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
-        i += 1;
+      while (i < lines.length) {
+        if (/^\s*\d+\.\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
+          i += 1;
+          continue;
+        }
+
+        if (!lines[i].trim()) {
+          let lookahead = i + 1;
+          while (lookahead < lines.length && !lines[lookahead].trim()) {
+            lookahead += 1;
+          }
+          if (lookahead < lines.length && /^\s*\d+\.\s+/.test(lines[lookahead])) {
+            i = lookahead;
+            continue;
+          }
+        }
+
+        break;
       }
       html.push(`<ol>${items.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ol>`);
       continue;

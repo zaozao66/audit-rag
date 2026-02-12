@@ -8,6 +8,8 @@ import type {
   InfoResponse,
   ListDocumentsResponse,
   SearchWithIntentResponse,
+  CitationItem,
+  StreamCitationsEvent,
   StreamProgressEvent,
   StatsResponse,
   UploadResponse
@@ -59,6 +61,7 @@ export async function streamAskWithLlm(
   query: string,
   onDelta: (chunk: string) => void,
   onProgress?: (event: StreamProgressEvent) => void,
+  onCitations?: (citations: CitationItem[]) => void,
   signal?: AbortSignal
 ) {
   const response = await fetch(`${API_BASE}/v1/chat/completions`, {
@@ -131,6 +134,10 @@ export async function streamAskWithLlm(
 
       if (payload?.event === 'progress') {
         onProgress?.(payload as StreamProgressEvent);
+      }
+
+      if (payload?.event === 'citations') {
+        onCitations?.((payload as StreamCitationsEvent).citations || []);
       }
 
       const delta = payload?.choices?.[0]?.delta?.content;

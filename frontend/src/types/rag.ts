@@ -20,10 +20,26 @@ export interface SearchResultItem {
   original_score?: number;
   text: string;
   doc_id: string;
+  chunk_id?: string;
   filename: string;
   file_type: string;
   doc_type: string;
   title: string;
+}
+
+export interface CitationItem {
+  source_id: string;
+  doc_id: string;
+  chunk_id: string;
+  filename: string;
+  title: string;
+  doc_type: string;
+  score: number;
+  original_score?: number;
+  text_preview: string;
+  page_nos: number[];
+  header: string;
+  section_path: string[];
 }
 
 export interface SearchWithIntentResponse {
@@ -41,6 +57,7 @@ export interface AskResponse {
   intent: string;
   answer: string;
   search_results: SearchResultItem[];
+  citations?: CitationItem[];
   llm_usage: Record<string, number>;
   model: string;
 }
@@ -55,6 +72,11 @@ export interface StreamProgressEvent {
   use_rerank?: boolean;
   hits?: number;
   model?: string;
+}
+
+export interface StreamCitationsEvent {
+  event: 'citations';
+  citations: CitationItem[];
 }
 
 export interface DocumentStats {

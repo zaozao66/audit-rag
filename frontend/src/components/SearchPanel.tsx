@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { streamAskWithLlm } from '../api/rag';
-import type { StreamProgressEvent } from '../types/rag';
+import type { CitationItem, StreamProgressEvent } from '../types/rag';
 import { renderMarkdownToHtml } from '../utils/markdown';
 
 const STAGE_LABEL: Record<StreamProgressEvent['stage'], string> = {
@@ -14,6 +14,7 @@ export function SearchPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [answerMd, setAnswerMd] = useState('');
+  const [citations, setCitations] = useState<CitationItem[]>([]);
   const [hasStarted, setHasStarted] = useState(false);
   const [progressEvents, setProgressEvents] = useState<StreamProgressEvent[]>([]);
   const [currentStageMessage, setCurrentStageMessage] = useState('等待提问');
@@ -36,6 +37,7 @@ export function SearchPanel() {
     setHasStarted(true);
     setError('');
     setAnswerMd('');
+    setCitations([]);
     setProgressEvents([]);
     setCurrentStageMessage('请求已发送，等待服务端响应');
 
@@ -54,6 +56,9 @@ export function SearchPanel() {
             return next;
           });
           setCurrentStageMessage(event.message);
+        },
+        (items) => {
+          setCitations(items);
         },
         controller.signal
       );
@@ -113,6 +118,27 @@ export function SearchPanel() {
 
       {hasStarted ? (
         <div className="answer-box markdown-body" dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }} />
+      ) : null}
+
+      {hasStarted && citations.length > 0 ? (
+        <div className="citation-board">
+          <strong>引用来源</strong>
+          <div className="citation-list">
+            {citations.map((item) => (
+              <article key={item.source_id} id={`cite-${item.source_id}`} className="citation-card">
+                <header>
+                  <span>[{item.source_id}]</span>
+                  <small>{item.filename || item.title || item.doc_id}</small>
+                </header>
+                <p>{item.text_preview || '无文本片段'}</p>
+                <footer>
+                  <small>doc_type: {item.doc_type || '-'}</small>
+                  <small>score: {item.score?.toFixed?.(4) ?? '-'}</small>
+                </footer>
+              </article>
+            ))}
+          </div>
+        </div>
       ) : null}
     </section>
   );

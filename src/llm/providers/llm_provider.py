@@ -357,17 +357,15 @@ class LLMProvider:
             filename = ctx.get('filename', '')
             doc_type = ctx.get('doc_type', '')
             score = ctx.get('score', 0)
+            source_id = ctx.get('source_id', f'S{i}')
             
-            # 构建单个上下文，使用文件名作为标识
+            # 构建单个上下文，附带稳定的来源ID，便于回答中引用 [Sx]
             if filename:
-                # 优先使用文件名
-                context_part = f"【来源: {filename}】"
+                context_part = f"[{source_id}] 来源: {filename}"
             elif title:
-                # 如果没有文件名，使用标题
-                context_part = f"【来源: {title}】"
+                context_part = f"[{source_id}] 来源: {title}"
             else:
-                # 都没有的情况下使用序号
-                context_part = f"【参考资料 {i}】"
+                context_part = f"[{source_id}] 来源: 参考资料{i}"
             
             # 添加标题（如果和文件名不同）
             if title and title != filename:
@@ -389,18 +387,12 @@ class LLMProvider:
         """
         return """你是一个专业的审计和合规助手，擅长根据法规制度和审计报告来回答问题。
 
-请遵循以下原则：
-1. 基于提供的参考资料进行回答，保持准确性和专业性
-2. 如果参考资料不足以回答问题，请明确说明
-3. 引用具体的制度条款或审计发现时，请注明来源
-4. 回答要结构清晰，层次分明
-5. 使用专业但易懂的语言
-
-回答格式建议：
-- 先总结要点
-- 再详细展开说明
-- 必要时引用原文
-- 最后给出建议或结论"""
+请严格遵循：
+1. 只能基于给定参考资料回答，不要编造来源
+2. 每条关键结论后必须添加来源标记，格式为 [S1]、[S2]
+3. 来源标记必须来自参考资料中的来源ID，不能凭空创建
+4. 如果资料不足，请明确说明“未在参考资料中找到充分依据”
+5. 回答结构清晰、专业、可执行"""
     
     def _build_user_prompt(self, query: str, context_text: str) -> str:
         """
@@ -416,7 +408,11 @@ class LLMProvider:
 
 问题: {query}
 
-请提供详细、准确的回答。"""
+输出要求：
+- 在结论句后追加来源标记，如：XXX。[S1]
+- 可以同时引用多个来源，如：[S1][S3]
+- 不要输出不存在的来源编号
+- 不要省略来源标记"""
 
 
 def create_llm_provider(config: Dict[str, Any]) -> LLMProvider:

@@ -17,6 +17,7 @@ def _format_search_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]
             "score": res['score'],
             "text": doc['text'],
             "doc_id": doc.get('doc_id', ''),
+            "chunk_id": doc.get('chunk_id', ''),
             "filename": doc.get('filename', ''),
             "file_type": doc.get('file_type', ''),
             "doc_type": doc.get('doc_type', ''),
@@ -72,16 +73,9 @@ def _stream_chat_completion(service: RAGService, query: str, top_k: int):
         if not rag_processor.llm_provider:
             raise ValueError("LLM功能未启用，请在初始化时传入llm_provider")
 
-        contexts = []
-        for res in search_results:
-            doc = res['document']
-            contexts.append({
-                'text': doc['text'],
-                'title': doc.get('title', ''),
-                'filename': doc.get('filename', ''),
-                'doc_type': doc.get('doc_type', ''),
-                'score': res['score'],
-            })
+        context_pack = rag_processor.build_contexts_and_citations(search_results)
+        contexts = context_pack["contexts"]
+        citations = context_pack["citations"]
 
         yield _progress("generation", "running", "LLM回答生成中")
         model_name = "unknown"
@@ -104,6 +98,7 @@ def _stream_chat_completion(service: RAGService, query: str, top_k: int):
                 usage = event.get("usage", {})
 
         yield _progress("generation", "done", "回答生成完成", {"model": model_name, "usage": usage})
+        yield f"data: {json.dumps({'event': 'citations', 'citations': citations}, ensure_ascii=False)}\n\n"
 
         final_chunk = {
             "choices": [{
@@ -171,6 +166,7 @@ def ask_with_llm():
             "intent": result.get('intent', 'unknown'),
             "answer": result['answer'],
             "search_results": _format_search_results(result['search_results']),
+            "citations": result.get('citations', []),
             "llm_usage": result['llm_usage'],
             "model": result['model'],
         })
@@ -242,6 +238,7 @@ def chat_completions():
             "model": result.get('model', 'unknown'),
             "usage": result.get('llm_usage', {}),
             "intent": result.get('intent', 'unknown'),
+            "citations": result.get('citations', []),
         }
         return jsonify(response)
     except ValueError as e:
