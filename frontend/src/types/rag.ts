@@ -18,6 +18,8 @@ export interface UploadResponse {
 export interface SearchResultItem {
   score: number;
   original_score?: number;
+  vector_score?: number;
+  graph_score?: number;
   text: string;
   doc_id: string;
   chunk_id?: string;
@@ -36,6 +38,8 @@ export interface CitationItem {
   doc_type: string;
   score: number;
   original_score?: number;
+  vector_score?: number;
+  graph_score?: number;
   text_preview: string;
   page_nos: number[];
   header: string;
@@ -48,6 +52,7 @@ export interface SearchWithIntentResponse {
   intent: string;
   intent_reason: string;
   suggested_top_k: number;
+  retrieval_mode?: RetrievalMode;
   results: SearchResultItem[];
 }
 
@@ -60,6 +65,7 @@ export interface AskResponse {
   citations?: CitationItem[];
   llm_usage: Record<string, number>;
   model: string;
+  retrieval_mode?: RetrievalMode;
 }
 
 export interface StreamProgressEvent {
@@ -98,6 +104,79 @@ export interface InfoResponse {
   embedding_model: string;
   rerank_enabled: boolean;
   document_stats: DocumentStats;
+  graph?: GraphInfo;
+}
+
+export type RetrievalMode = 'vector' | 'graph' | 'hybrid';
+
+export interface RetrievalOptions {
+  retrievalMode: RetrievalMode;
+  useGraph: boolean;
+  graphTopK: number;
+  graphHops: number;
+  hybridAlpha: number;
+}
+
+export interface GraphStats {
+  nodes: number;
+  edges: number;
+  by_type: Record<string, number>;
+}
+
+export interface GraphInfo {
+  graph_file_exists: boolean;
+  graph_path: string;
+  in_memory: GraphStats;
+}
+
+export interface RebuildGraphResponse {
+  success: boolean;
+  message: string;
+  graph_stats: GraphStats;
+  graph_info: GraphInfo;
+}
+
+export interface GraphNodeItem {
+  id: string;
+  type: string;
+  name: string;
+  attrs: Record<string, unknown>;
+}
+
+export interface GraphEdgeItem {
+  source: string;
+  source_name: string;
+  source_type: string;
+  target: string;
+  target_name: string;
+  target_type: string;
+  relation: string;
+  weight: number;
+}
+
+export interface GraphNodesResponse {
+  success: boolean;
+  total: number;
+  page: number;
+  page_size: number;
+  nodes: GraphNodeItem[];
+}
+
+export interface GraphEdgesResponse {
+  success: boolean;
+  total: number;
+  page: number;
+  page_size: number;
+  edges: GraphEdgeItem[];
+}
+
+export interface GraphSubgraphResponse {
+  success: boolean;
+  seed_nodes: string[];
+  nodes: GraphNodeItem[];
+  edges: GraphEdgeItem[];
+  hops: number;
+  max_nodes: number;
 }
 
 export interface DocumentRecord {

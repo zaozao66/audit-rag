@@ -119,6 +119,102 @@ def clear_vector_store():
         return jsonify({"error": f"清空向量库失败: {str(e)}"}), 500
 
 
+@storage_bp.route('/graph/rebuild', methods=['POST'])
+def rebuild_graph_index():
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        rag_processor.load_vector_store()
+        stats = rag_processor.rebuild_graph_index(save=True)
+
+        return jsonify({
+            "success": True,
+            "message": "图索引重建完成",
+            "graph_stats": stats,
+            "graph_info": rag_processor.get_graph_stats(),
+        })
+    except Exception as e:
+        current_app.logger.error("重建图索引失败: %s", e)
+        return jsonify({"error": f"重建图索引失败: {str(e)}"}), 500
+
+
+@storage_bp.route('/graph/nodes', methods=['GET'])
+def list_graph_nodes():
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+        node_type = request.args.get('node_type')
+        keyword = request.args.get('keyword')
+
+        page = max(1, page)
+        page_size = max(1, min(200, page_size))
+
+        data = rag_processor.list_graph_nodes(
+            page=page,
+            page_size=page_size,
+            node_type=node_type,
+            keyword=keyword,
+        )
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        current_app.logger.error("获取图节点失败: %s", e)
+        return jsonify({"error": f"获取图节点失败: {str(e)}"}), 500
+
+
+@storage_bp.route('/graph/edges', methods=['GET'])
+def list_graph_edges():
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 20))
+        relation = request.args.get('relation')
+        keyword = request.args.get('keyword')
+
+        page = max(1, page)
+        page_size = max(1, min(200, page_size))
+
+        data = rag_processor.list_graph_edges(
+            page=page,
+            page_size=page_size,
+            relation=relation,
+            keyword=keyword,
+        )
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        current_app.logger.error("获取图边失败: %s", e)
+        return jsonify({"error": f"获取图边失败: {str(e)}"}), 500
+
+
+@storage_bp.route('/graph/subgraph', methods=['POST'])
+def get_graph_subgraph():
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        data = request.get_json(silent=True) or {}
+        query = data.get('query')
+        node_ids = data.get('node_ids') if isinstance(data.get('node_ids'), list) else []
+        hops = int(data.get('hops', 2))
+        max_nodes = int(data.get('max_nodes', 120))
+
+        result = rag_processor.get_graph_subgraph(
+            query=query,
+            node_ids=node_ids,
+            hops=hops,
+            max_nodes=max_nodes,
+        )
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        current_app.logger.error("获取子图失败: %s", e)
+        return jsonify({"error": f"获取子图失败: {str(e)}"}), 500
+
+
 @storage_bp.route('/upload_store', methods=['POST'])
 def upload_and_store_documents():
     try:

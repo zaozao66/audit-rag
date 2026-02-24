@@ -11,6 +11,7 @@
 - 可配置的文档分块策略
 - **意图驱动搜索**：识别用户意图并动态路由至不同库（制度/报告/问题库）
 - **重排序增强**：集成rerank模型提升相关性
+- **GraphRAG 混合检索**：支持 `vector / graph / hybrid` 三种检索模式，可做多跳关联召回
 - **LLM智能问答**：基于意图识别和检索结果生成精准回答
 - **持久化向量库**：支持增量上传与自动加载
 - **HTTP API接口**：提供 RESTful API，支持流式问答与文档管理
@@ -65,6 +66,7 @@ API端点：
 - `POST /ask` - 非流式LLM问答
 - `POST /v1/chat/completions` - OpenAI兼容问答（支持流式SSE）
 - `POST /clear` - 清空向量库
+- `POST /graph/rebuild` - 重建 GraphRAG 图索引
 - `GET  /info` - 系统信息
 - `GET  /documents` - 文档列表（支持类型/关键字/是否含已删除过滤）
 - `DELETE /documents` - 清空全部文档（真实删除向量与元数据）
@@ -110,7 +112,23 @@ curl -X POST http://localhost:8000/store \
 ```bash
 curl -X POST http://localhost:8000/search_with_intent \
   -H "Content-Type: application/json" \
-  -d '{"query": "采购管理有哪些制度要求？"}'
+  -d '{
+    "query": "采购管理有哪些制度要求？",
+    "retrieval_mode": "hybrid",
+    "graph_hops": 2,
+    "hybrid_alpha": 0.65
+  }'
+```
+
+`retrieval_mode` 可选值：
+- `vector`：仅向量检索（默认）
+- `graph`：仅图检索（多跳实体关系）
+- `hybrid`：向量 + 图融合检索（推荐）
+
+#### 重建图索引示例
+
+```bash
+curl -X POST http://localhost:8000/graph/rebuild
 ```
 
 #### 清空向量库API示例：
@@ -144,7 +162,8 @@ audit-rag/
 │   │   ├── parsers/        # 文档格式解析 (支持 PDF 表格逻辑聚合)
 │   │   └── splitters/      # 智能分块策略 (制度模式、审计报告模式、台账模式)
 │   ├── indexing/           # 存储层：向量化与持久化
-│   │   └── vector/         # 向量数据库实现与 Embedding Provider
+│   │   ├── vector/         # 向量数据库实现与 Embedding Provider
+│   │   └── graph/          # GraphRAG 图索引构建与检索
 │   ├── retrieval/          # 检索层：搜索、路由与重排
 │   │   ├── router/         # 意图路由 (Intent Routing) 与流程编排
 │   │   ├── searchers/      # 具体检索策略实现
@@ -161,5 +180,5 @@ audit-rag/
 - **分块策略**：基于语义边界的智能分块，内置制度（章/节/条）、报告（一/（一））、审计台账（逻辑行）等专项优化
 - **嵌入模型**：厂商中立设计，支持 text-embedding-v4、BGE 等多种 Embedding 模型
 - **向量存储**：基于 Faiss 的高效向量检索，支持元数据过滤与持久化
-- **检索增强**：集成意图路由 (Intent Routing) 与多级重排序 (Rerank) 机制
+- **检索增强**：集成意图路由 (Intent Routing)、GraphRAG 多跳扩展与多级重排序 (Rerank) 机制
 - **接口规范**：提供 RESTful 标准接口，并兼容 OpenAI Chat Completions 协议（支持流式响应）

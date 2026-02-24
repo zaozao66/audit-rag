@@ -69,6 +69,7 @@ class DocumentProcessor:
         try:
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages):
+                    page_tag = f"[[PAGE:{page_num + 1}]]"
                     if is_audit_issue:
                         # 审计问题模式：尝试提取表格
                         tables = page.extract_tables()
@@ -100,7 +101,7 @@ class DocumentProcessor:
                                         # 只有当问题摘要或整改情况不为空时才生成记录
                                         if issue or rectify:
                                             # 将每一行作为一个独立的 [ROW_START] 标记
-                                            row_text = f" [ROW_START] {current_idx} | {current_dept} | {issue} | {rectify}"
+                                            row_text = f" [ROW_START] {page_tag} {current_idx} | {current_dept} | {issue} | {rectify}"
                                             # 如果还有多余列（补充信息），也带上
                                             if len(cells) > 4:
                                                 row_text += " | " + " | ".join(cells[4:])
@@ -109,12 +110,12 @@ class DocumentProcessor:
                             # 如果没提取到表格，降级使用文本提取
                             page_text = page.extract_text()
                             if page_text:
-                                text_parts.append(page_text)
+                                text_parts.append(f"{page_tag}\n{page_text}")
                     else:
                         # 普通模式：直接提取文本
                         page_text = page.extract_text()
                         if page_text:
-                            text_parts.append(page_text)
+                            text_parts.append(f"{page_tag}\n{page_text}")
                     logger.debug(f"处理PDF第 {page_num + 1} 页")
             
             full_text = "\n".join(text_parts)
@@ -222,5 +223,4 @@ def process_uploaded_documents(file_paths: List[str], doc_type: str = 'internal_
     
     logger.info(f"所有文档处理完成，成功处理 {len(documents)} 个文档")
     return documents
-
 

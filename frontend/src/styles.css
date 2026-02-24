@@ -76,6 +76,10 @@ body {
   animation: slide-in 220ms ease;
 }
 
+.tab-hidden {
+  display: none;
+}
+
 .tab-documents {
   grid-template-columns: 1fr;
 }
@@ -423,6 +427,35 @@ select {
   color: var(--muted);
 }
 
+.compare-board {
+  margin-top: 14px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 980px) {
+  .compare-board {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.compare-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.64);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.compare-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -582,6 +615,79 @@ select {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+}
+
+.panel-graph {
+  display: grid;
+  gap: 12px;
+}
+
+.graph-browser-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 980px) {
+  .graph-browser-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.graph-section {
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  display: grid;
+  gap: 10px;
+}
+
+.graph-subgraph {
+  margin-top: 4px;
+}
+
+.graph-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.graph-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.graph-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.graph-table th,
+.graph-table td {
+  text-align: left;
+  border-bottom: 1px solid rgba(84, 62, 43, 0.12);
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+.graph-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(244, 241, 234, 0.95);
+  z-index: 1;
+}
+
+.pager-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @keyframes slide-in {

@@ -20,7 +20,7 @@ src/api/app.py (Flask App Factory)
       src/api/services/rag_service.py
              |
              v
-      src/core + src/ingestion + src/indexing + src/retrieval + src/llm
+      src/core + src/ingestion + src/indexing(vector+graph) + src/retrieval + src/llm
 ```
 
 ## 典型请求流程
@@ -29,6 +29,7 @@ src/api/app.py (Flask App Factory)
 2. Flask 路由接收并做参数校验。
 3. `RAGService` 统一管理处理器与依赖初始化。
 4. 进入检索/向量/LLM/文档模块执行业务逻辑。
+   - 检索支持 `vector / graph / hybrid` 三种模式
 5. 返回 JSON 或 SSE 流式响应（问答场景）。
 
 ## 设计要点

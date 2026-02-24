@@ -265,7 +265,12 @@ class LLMProvider:
   "intent": "意图名称",
   "reason": "分类的逻辑理由",
   "suggested_top_k": 建议检索的片段数量(5-30之间的整数),
-  "doc_types": ["建议搜索的文档类型列表，可选: internal_regulation, external_regulation, internal_report, external_report, audit_issue"]
+  "doc_types": ["建议搜索的文档类型列表，可选: internal_regulation, external_regulation, internal_report, external_report, audit_issue"],
+  "retrieval_mode": "vector/hybrid/graph 之一",
+  "use_graph": true 或 false,
+  "graph_hops": 1-4,
+  "graph_top_k": 5-40,
+  "hybrid_alpha": 0-1 之间的小数（越大越偏向向量）
 }}
 
 用户问题: {query}"""
@@ -329,6 +334,16 @@ class LLMProvider:
                 intent_result['suggested_top_k'] = 5
             if 'reason' not in intent_result:
                 intent_result['reason'] = 'LLM未提供具体理由'
+            if 'retrieval_mode' not in intent_result:
+                intent_result['retrieval_mode'] = 'hybrid'
+            if 'use_graph' not in intent_result:
+                intent_result['use_graph'] = True
+            if 'graph_hops' not in intent_result:
+                intent_result['graph_hops'] = 2
+            if 'graph_top_k' not in intent_result:
+                intent_result['graph_top_k'] = 12
+            if 'hybrid_alpha' not in intent_result:
+                intent_result['hybrid_alpha'] = 0.65
                 
             logger.info(f"识别到意图: {intent_result['intent']} (理由: {intent_result['reason']}, 建议top_k: {intent_result['suggested_top_k']})")
             return intent_result
@@ -339,7 +354,12 @@ class LLMProvider:
                 "intent": "comprehensive_query",
                 "reason": f"解析失败降级: {str(e)}",
                 "suggested_top_k": 5,
-                "doc_types": ["internal_regulation", "external_regulation", "audit_report", "audit_issue"]
+                "doc_types": ["internal_regulation", "external_regulation", "audit_report", "audit_issue"],
+                "retrieval_mode": "hybrid",
+                "use_graph": True,
+                "graph_hops": 2,
+                "graph_top_k": 12,
+                "hybrid_alpha": 0.65
             }
     
     def _build_context_text(self, contexts: List[Dict[str, Any]]) -> str:

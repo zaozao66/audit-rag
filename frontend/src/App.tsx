@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getDocumentStats, getInfo, listDocuments } from './api/rag';
 import { DocumentsPanel } from './components/DocumentsPanel';
+import { GraphPanel } from './components/GraphPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { SystemPanel } from './components/SystemPanel';
 import { UploadPanel } from './components/UploadPanel';
 import type { DocumentRecord, DocumentStats, InfoResponse } from './types/rag';
 
-type MainTab = 'system' | 'documents' | 'search';
+type MainTab = 'system' | 'documents' | 'search' | 'graph';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<MainTab>('system');
@@ -73,40 +74,41 @@ export default function App() {
         <button className={activeTab === 'search' ? 'active' : ''} onClick={() => setActiveTab('search')}>
           检索回答
         </button>
+        <button className={activeTab === 'graph' ? 'active' : ''} onClick={() => setActiveTab('graph')}>
+          图谱浏览
+        </button>
       </nav>
 
-      {activeTab === 'system' ? (
-        <section className="tab-content">
-          <SystemPanel info={info} stats={stats} loading={loadingMeta} onRefresh={loadMeta} />
-        </section>
-      ) : null}
+      <section className={`tab-content ${activeTab === 'system' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'system'}>
+        <SystemPanel info={info} stats={stats} loading={loadingMeta} onRefresh={loadMeta} />
+      </section>
 
-      {activeTab === 'documents' ? (
-        <section className="tab-content tab-documents">
-          <UploadPanel onUploaded={refreshAll} />
-          <DocumentsPanel
-            documents={documents}
-            docTypeOptions={Object.keys(stats?.by_type ?? {})}
-            loading={loadingDocs}
-            docType={docType}
-            keyword={keyword}
-            includeDeleted={includeDeleted}
-            onFilterChange={({ docType: nextType, keyword: nextKeyword, includeDeleted: nextDeleted }) => {
-              setDocType(nextType);
-              setKeyword(nextKeyword);
-              setIncludeDeleted(nextDeleted);
-            }}
-            onRefresh={loadDocs}
-            onDataChanged={refreshAll}
-          />
-        </section>
-      ) : null}
+      <section className={`tab-content tab-documents ${activeTab === 'documents' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'documents'}>
+        <UploadPanel onUploaded={refreshAll} />
+        <DocumentsPanel
+          documents={documents}
+          docTypeOptions={Object.keys(stats?.by_type ?? {})}
+          loading={loadingDocs}
+          docType={docType}
+          keyword={keyword}
+          includeDeleted={includeDeleted}
+          onFilterChange={({ docType: nextType, keyword: nextKeyword, includeDeleted: nextDeleted }) => {
+            setDocType(nextType);
+            setKeyword(nextKeyword);
+            setIncludeDeleted(nextDeleted);
+          }}
+          onRefresh={loadDocs}
+          onDataChanged={refreshAll}
+        />
+      </section>
 
-      {activeTab === 'search' ? (
-        <section className="tab-content">
-          <SearchPanel />
-        </section>
-      ) : null}
+      <section className={`tab-content ${activeTab === 'search' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'search'}>
+        <SearchPanel />
+      </section>
+
+      <section className={`tab-content ${activeTab === 'graph' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'graph'}>
+        <GraphPanel graphTypes={Object.keys(info?.graph?.in_memory?.by_type ?? {})} onGraphChanged={loadMeta} />
+      </section>
     </main>
   );
 }

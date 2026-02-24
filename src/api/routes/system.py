@@ -30,6 +30,7 @@ def get_info():
             vector_store_status = "not loaded or empty"
 
         doc_stats = rag_processor.get_document_stats() if hasattr(rag_processor, 'get_document_stats') else {}
+        graph_stats = rag_processor.get_graph_stats() if hasattr(rag_processor, 'get_graph_stats') else {}
 
         return jsonify({
             "status": "running",
@@ -39,7 +40,8 @@ def get_info():
             "chunker_type": rag_processor.chunker_type,
             "embedding_model": rag_processor.embedding_provider.model_name if hasattr(rag_processor.embedding_provider, 'model_name') else 'unknown',
             "rerank_enabled": rag_processor.rerank_provider is not None,
-            "document_stats": doc_stats
+            "document_stats": doc_stats,
+            "graph": graph_stats,
         })
     except Exception as e:
         current_app.logger.error("获取系统信息时出错: %s", e)

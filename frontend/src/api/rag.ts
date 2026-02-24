@@ -12,7 +12,12 @@ import type {
   StreamCitationsEvent,
   StreamProgressEvent,
   StatsResponse,
-  UploadResponse
+  UploadResponse,
+  RetrievalOptions,
+  RebuildGraphResponse,
+  GraphEdgesResponse,
+  GraphNodesResponse,
+  GraphSubgraphResponse
 } from '../types/rag';
 
 export function getInfo() {
@@ -49,27 +54,31 @@ export function searchWithIntent(query: string) {
   });
 }
 
-export function askWithLlm(query: string, topK: number) {
+export function askWithLlm(query: string, topK: number, options?: Partial<RetrievalOptions>) {
+  const payload = buildRetrievalPayload(options);
   return apiFetch<AskResponse>('/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, top_k: topK })
+    body: JSON.stringify({ query, top_k: topK, ...payload })
   });
 }
 
 export async function streamAskWithLlm(
   query: string,
+  options: Partial<RetrievalOptions> | undefined,
   onDelta: (chunk: string) => void,
   onProgress?: (event: StreamProgressEvent) => void,
   onCitations?: (citations: CitationItem[]) => void,
   signal?: AbortSignal
 ) {
+  const payload = buildRetrievalPayload(options);
   const response = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages: [{ role: 'user', content: query }],
-      stream: true
+      stream: true,
+      ...payload
     }),
     signal
   });
@@ -188,4 +197,68 @@ export function clearAllDocuments() {
 
 export function getDocumentStats() {
   return apiFetch<StatsResponse>('/documents/stats');
+}
+
+export function rebuildGraphIndex() {
+  return apiFetch<RebuildGraphResponse>('/graph/rebuild', {
+    method: 'POST'
+  });
+}
+
+export function getGraphNodes(params: {
+  page?: number;
+  pageSize?: number;
+  nodeType?: string;
+  keyword?: string;
+}) {
+  const query = new URLSearchParams();
+  query.set('page', String(params.page ?? 1));
+  query.set('page_size', String(params.pageSize ?? 20));
+  if (params.nodeType?.trim()) query.set('node_type', params.nodeType.trim());
+  if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
+  return apiFetch<GraphNodesResponse>(`/graph/nodes?${query.toString()}`);
+}
+
+export function getGraphEdges(params: {
+  page?: number;
+  pageSize?: number;
+  relation?: string;
+  keyword?: string;
+}) {
+  const query = new URLSearchParams();
+  query.set('page', String(params.page ?? 1));
+  query.set('page_size', String(params.pageSize ?? 20));
+  if (params.relation?.trim()) query.set('relation', params.relation.trim());
+  if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
+  return apiFetch<GraphEdgesResponse>(`/graph/edges?${query.toString()}`);
+}
+
+export function getGraphSubgraph(payload: {
+  query?: string;
+  nodeIds?: string[];
+  hops?: number;
+  maxNodes?: number;
+}) {
+  return apiFetch<GraphSubgraphResponse>('/graph/subgraph', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: payload.query,
+      node_ids: payload.nodeIds ?? [],
+      hops: payload.hops ?? 2,
+      max_nodes: payload.maxNodes ?? 120
+    })
+  });
+}
+
+function buildRetrievalPayload(options?: Partial<RetrievalOptions>) {
+  if (!options) return {};
+
+  const payload: Record<string, unknown> = {};
+  if (options.retrievalMode !== undefined) payload.retrieval_mode = options.retrievalMode;
+  if (options.useGraph !== undefined) payload.use_graph = options.useGraph;
+  if (options.graphTopK !== undefined) payload.graph_top_k = options.graphTopK;
+  if (options.graphHops !== undefined) payload.graph_hops = options.graphHops;
+  if (options.hybridAlpha !== undefined) payload.hybrid_alpha = options.hybridAlpha;
+  return payload;
 }

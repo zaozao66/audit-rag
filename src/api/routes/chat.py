@@ -25,11 +25,51 @@ def _format_search_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]
         }
         if 'original_score' in res:
             entry["original_score"] = res['original_score']
+        if 'vector_score' in res:
+            entry["vector_score"] = res['vector_score']
+        if 'graph_score' in res:
+            entry["graph_score"] = res['graph_score']
         formatted.append(entry)
     return formatted
 
 
-def _stream_chat_completion(service: RAGService, query: str, top_k: int):
+def _parse_retrieval_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+        return bool(value)
+
+    overrides: Dict[str, Any] = {}
+    if not isinstance(data, dict):
+        return overrides
+
+    if 'retrieval_mode' in data:
+        overrides['retrieval_mode'] = str(data.get('retrieval_mode', '')).lower()
+    if 'use_graph' in data:
+        overrides['use_graph'] = _to_bool(data.get('use_graph'))
+
+    if 'graph_top_k' in data:
+        try:
+            overrides['graph_top_k'] = int(data.get('graph_top_k'))
+        except (TypeError, ValueError):
+            pass
+    if 'graph_hops' in data:
+        try:
+            overrides['graph_hops'] = int(data.get('graph_hops'))
+        except (TypeError, ValueError):
+            pass
+    if 'hybrid_alpha' in data:
+        try:
+            overrides['hybrid_alpha'] = float(data.get('hybrid_alpha'))
+        except (TypeError, ValueError):
+            pass
+
+    return overrides
+
+
+def _stream_chat_completion(service: RAGService, query: str, top_k: int, retrieval_overrides: Dict[str, Any]):
     def _progress(stage: str, status: str, message: str, extra: Dict[str, Any] = None):
         payload = {
             "event": "progress",
@@ -48,7 +88,13 @@ def _stream_chat_completion(service: RAGService, query: str, top_k: int):
         rag_processor = service.get_processor(use_rerank=True, use_llm=True)
 
         yield _progress("intent", "running", "意图识别中")
-        params = rag_processor.router.get_routed_params(query, default_top_k=top_k, use_rerank=True, rerank_top_k=10)
+        params = rag_processor.router.get_routed_params(
+            query,
+            default_top_k=top_k,
+            use_rerank=True,
+            rerank_top_k=10,
+            retrieval_overrides=retrieval_overrides,
+        )
         yield _progress(
             "intent",
             "done",
@@ -57,16 +103,28 @@ def _stream_chat_completion(service: RAGService, query: str, top_k: int):
                 "intent": params.get("intent", "unknown"),
                 "top_k": params.get("top_k", top_k),
                 "use_rerank": params.get("use_rerank", False),
+                "retrieval_mode": params.get("retrieval_mode", "hybrid"),
             },
         )
 
-        yield _progress("retrieval", "running", "向量库匹配中")
+        retrieval_mode = params.get("retrieval_mode", "hybrid")
+        retrieval_label = {
+            "vector": "向量检索",
+            "graph": "图检索",
+            "hybrid": "混合检索",
+        }.get(retrieval_mode, "混合检索")
+        yield _progress("retrieval", "running", f"{retrieval_label}中")
         search_results = rag_processor.search(
             query,
             top_k=params.get("top_k", top_k),
             use_rerank=params.get("use_rerank", True),
             rerank_top_k=params.get("rerank_top_k", 10),
             doc_types=params.get("doc_types"),
+            use_graph=params.get("use_graph", True),
+            retrieval_mode=retrieval_mode,
+            graph_top_k=params.get("graph_top_k", 12),
+            graph_hops=params.get("graph_hops", 2),
+            hybrid_alpha=params.get("hybrid_alpha", 0.65),
         )
         yield _progress("retrieval", "done", f"检索完成，命中 {len(search_results)} 条结果", {"hits": len(search_results)})
 
@@ -127,18 +185,24 @@ def search_with_intent():
         service: RAGService = current_app.extensions['rag_service']
         rag_processor = service.get_processor(use_rerank=True, use_llm=True)
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         query = data.get('query')
         if not query:
             return jsonify({"error": "缺少query参数"}), 400
 
-        result = rag_processor.search_with_intent(query, use_rerank=True)
+        retrieval_overrides = _parse_retrieval_overrides(data)
+        result = rag_processor.search_with_intent(
+            query,
+            use_rerank=True,
+            retrieval_overrides=retrieval_overrides,
+        )
         return jsonify({
             "success": True,
             "query": query,
             "intent": result['intent'],
             "intent_reason": result['intent_reason'],
             "suggested_top_k": result['suggested_top_k'],
+            "retrieval_mode": result.get('retrieval_mode', 'hybrid'),
             "results": _format_search_results(result['search_results']),
         })
     except Exception as e:
@@ -152,18 +216,24 @@ def ask_with_llm():
         service: RAGService = current_app.extensions['rag_service']
         rag_processor = service.get_processor(use_rerank=True, use_llm=True)
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         if not data or 'query' not in data:
             return jsonify({"error": "缺少query字段"}), 400
 
         query = data['query']
         top_k = data.get('top_k', 5)
-        result = rag_processor.search_with_llm_answer(query, top_k=top_k)
+        retrieval_overrides = _parse_retrieval_overrides(data)
+        result = rag_processor.search_with_llm_answer(
+            query,
+            top_k=top_k,
+            retrieval_overrides=retrieval_overrides,
+        )
 
         return jsonify({
             "success": True,
             "query": query,
             "intent": result.get('intent', 'unknown'),
+            "retrieval_mode": result.get('retrieval_mode', 'hybrid'),
             "answer": result['answer'],
             "search_results": _format_search_results(result['search_results']),
             "citations": result.get('citations', []),
@@ -206,17 +276,19 @@ def chat_completions():
 
         stream = data.get('stream', False)
         top_k = data.get('top_k', 5)
+        retrieval_overrides = _parse_retrieval_overrides(data)
 
         current_app.logger.info(
-            "OpenAI兼容接口收到请求: query='%s...', stream=%s, top_k=%s",
+            "OpenAI兼容接口收到请求: query='%s...', stream=%s, top_k=%s, retrieval_mode=%s",
             user_message[:50],
             stream,
             top_k,
+            retrieval_overrides.get("retrieval_mode", "auto"),
         )
 
         if stream:
             return Response(
-                _stream_chat_completion(service, user_message, top_k),
+                _stream_chat_completion(service, user_message, top_k, retrieval_overrides),
                 mimetype='text/event-stream',
                 headers={
                     'Cache-Control': 'no-cache',
@@ -225,7 +297,11 @@ def chat_completions():
             )
 
         rag_processor = service.get_processor(use_rerank=True, use_llm=True)
-        result = rag_processor.search_with_llm_answer(user_message, top_k=top_k)
+        result = rag_processor.search_with_llm_answer(
+            user_message,
+            top_k=top_k,
+            retrieval_overrides=retrieval_overrides,
+        )
         response = {
             "choices": [{
                 "message": {
@@ -238,6 +314,7 @@ def chat_completions():
             "model": result.get('model', 'unknown'),
             "usage": result.get('llm_usage', {}),
             "intent": result.get('intent', 'unknown'),
+            "retrieval_mode": result.get('retrieval_mode', 'hybrid'),
             "citations": result.get('citations', []),
         }
         return jsonify(response)
