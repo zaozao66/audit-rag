@@ -15,6 +15,18 @@ from src.ingestion.splitters.smart_chunker import SmartChunker
 storage_bp = Blueprint('storage', __name__)
 
 
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    return default
+
+
 @storage_bp.route('/store', methods=['POST'])
 def store_documents():
     try:
@@ -149,6 +161,7 @@ def list_graph_nodes():
         page_size = int(request.args.get('page_size', 20))
         node_type = request.args.get('node_type')
         keyword = request.args.get('keyword')
+        include_evidence_nodes = _to_bool(request.args.get('include_evidence_nodes'), default=False)
 
         page = max(1, page)
         page_size = max(1, min(200, page_size))
@@ -158,6 +171,7 @@ def list_graph_nodes():
             page_size=page_size,
             node_type=node_type,
             keyword=keyword,
+            include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **data})
     except Exception as e:
@@ -175,6 +189,7 @@ def list_graph_edges():
         page_size = int(request.args.get('page_size', 20))
         relation = request.args.get('relation')
         keyword = request.args.get('keyword')
+        include_evidence_nodes = _to_bool(request.args.get('include_evidence_nodes'), default=False)
 
         page = max(1, page)
         page_size = max(1, min(200, page_size))
@@ -184,6 +199,7 @@ def list_graph_edges():
             page_size=page_size,
             relation=relation,
             keyword=keyword,
+            include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **data})
     except Exception as e:
@@ -202,12 +218,14 @@ def get_graph_subgraph():
         node_ids = data.get('node_ids') if isinstance(data.get('node_ids'), list) else []
         hops = int(data.get('hops', 2))
         max_nodes = int(data.get('max_nodes', 120))
+        include_evidence_nodes = _to_bool(data.get('include_evidence_nodes'), default=False)
 
         result = rag_processor.get_graph_subgraph(
             query=query,
             node_ids=node_ids,
             hops=hops,
             max_nodes=max_nodes,
+            include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **result})
     except Exception as e:
@@ -226,6 +244,7 @@ def get_graph_path():
         target_node_id = str(data.get('target_node_id', '') or '')
         source_query = str(data.get('source_query', '') or '')
         target_query = str(data.get('target_query', '') or '')
+        include_evidence_nodes = _to_bool(data.get('include_evidence_nodes'), default=False)
         try:
             max_hops = int(data.get('max_hops', 4))
         except (TypeError, ValueError):
@@ -245,6 +264,7 @@ def get_graph_path():
             target_query=target_query,
             max_hops=max_hops,
             max_candidates=max_candidates,
+            include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **result})
     except Exception as e:

@@ -38,6 +38,7 @@ RECTIFICATION_STATUS_LABELS = {
     "in_progress": "整改中",
     "pending": "待整改",
 }
+EVIDENCE_NODE_TYPES = {ontology.ENTITY_CHUNK, ontology.ENTITY_DOCUMENT}
 
 
 class RAGProcessor:
@@ -605,12 +606,12 @@ class RAGProcessor:
         return {
             "source": source_id,
             "source_name": source_name,
-            "source_name_label": self._label_node_name(source_type, source_name),
+            "source_name_label": self._label_node_name(source_type, source_name, attrs=source_node.get("attrs", {})),
             "source_type": source_type,
             "source_type_label": entity_type_label(source_type),
             "target": target_id,
             "target_name": target_name,
-            "target_name_label": self._label_node_name(target_type, target_name),
+            "target_name_label": self._label_node_name(target_type, target_name, attrs=target_node.get("attrs", {})),
             "target_type": target_type,
             "target_type_label": entity_type_label(target_type),
             "relation": relation,
@@ -618,6 +619,7 @@ class RAGProcessor:
             "weight": float(edge.get("weight", 1.0)),
             "attrs": edge.get("attrs", {}),
             "direction": direction,
+            "is_evidence_edge": self._is_evidence_node_type(source_type) or self._is_evidence_node_type(target_type),
         }
 
     def _build_path_text(self, path_nodes: List[Dict[str, Any]], path_edges: List[Dict[str, Any]]) -> str:
@@ -646,6 +648,7 @@ class RAGProcessor:
         target_id: str,
         max_hops: int,
         incoming_index: Dict[str, List[Tuple[str, Dict[str, Any]]]],
+        include_evidence_nodes: bool = True,
     ) -> Optional[Dict[str, Any]]:
         if source_id not in self.graph_store.nodes or target_id not in self.graph_store.nodes:
             return None
@@ -676,6 +679,11 @@ class RAGProcessor:
                     continue
                 if nxt in depth:
                     continue
+                if not include_evidence_nodes:
+                    nxt_node = self.graph_store.get_node(nxt) or {}
+                    nxt_type = str(nxt_node.get("type", ""))
+                    if self._is_evidence_node_type(nxt_type):
+                        continue
 
                 depth[nxt] = current_depth + 1
                 parent[nxt] = (current, edge, "forward")
@@ -692,6 +700,11 @@ class RAGProcessor:
                     continue
                 if prev_id in depth:
                     continue
+                if not include_evidence_nodes:
+                    prev_node = self.graph_store.get_node(prev_id) or {}
+                    prev_type = str(prev_node.get("type", ""))
+                    if self._is_evidence_node_type(prev_type):
+                        continue
 
                 depth[prev_id] = current_depth + 1
                 parent[prev_id] = (current, edge, "reverse")
@@ -739,10 +752,14 @@ class RAGProcessor:
         node_id: str = "",
         query: str = "",
         max_candidates: int = 5,
+        include_evidence_nodes: bool = True,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         normalized_node_id = str(node_id or "").strip()
         if normalized_node_id and normalized_node_id in self.graph_store.nodes:
             selected = self.graph_store.nodes[normalized_node_id]
+            selected_type = str(selected.get("type", ""))
+            if not include_evidence_nodes and self._is_evidence_node_type(selected_type):
+                return "", []
             return normalized_node_id, [{**self._decorate_node(selected), "score": 1.0}]
 
         query_text = str(query or "").strip()
@@ -757,6 +774,9 @@ class RAGProcessor:
                 continue
             node = self.graph_store.get_node(match_id)
             if not node:
+                continue
+            node_type = str(node.get("type", ""))
+            if not include_evidence_nodes and self._is_evidence_node_type(node_type):
                 continue
             candidates.append({**self._decorate_node(node), "score": float(match.get("score", 0.0))})
 
@@ -986,20 +1006,67 @@ class RAGProcessor:
         self.rebuild_graph_index(save=True)
 
     @staticmethod
-    def _label_node_name(node_type: str, node_name: str) -> str:
+    def _is_evidence_node_type(node_type: str) -> bool:
+        return str(node_type or "") in EVIDENCE_NODE_TYPES
+
+    @staticmethod
+    def _format_pages(page_nos: List[Any], max_len: int = 3) -> str:
+        values = []
+        for p in page_nos or []:
+            try:
+                values.append(int(p))
+            except (TypeError, ValueError):
+                continue
+        values = sorted(set(values))
+        if not values:
+            return ""
+        if len(values) <= max_len:
+            return "p." + ",".join(str(v) for v in values)
+        return "p." + ",".join(str(v) for v in values[:max_len]) + "..."
+
+    @staticmethod
+    def _chunk_name_label(attrs: Dict[str, Any], fallback: str) -> str:
+        filename = str(attrs.get("filename", "") or attrs.get("title", "") or "").strip()
+        pages = RAGProcessor._format_pages(attrs.get("page_nos", []), max_len=3)
+        header = str(attrs.get("header", "") or "").strip()
+        semantic_boundary = str(attrs.get("semantic_boundary", "") or "").strip()
+        text_preview = str(attrs.get("text_preview", "") or "").strip()
+
+        parts = []
+        if filename:
+            parts.append(filename)
+        if pages:
+            parts.append(pages)
+        if header:
+            parts.append(header[:30])
+        elif semantic_boundary:
+            parts.append(semantic_boundary[:30])
+        elif text_preview:
+            parts.append(text_preview[:30])
+
+        if parts:
+            return " | ".join(parts)
+        return fallback
+
+    def _label_node_name(self, node_type: str, node_name: str, attrs: Optional[Dict[str, Any]] = None) -> str:
+        attrs = attrs or {}
         if node_type == "doc_type":
             return doc_type_label(node_name)
         if node_type == "rectification_status":
             return RECTIFICATION_STATUS_LABELS.get(node_name, node_name)
+        if node_type == ontology.ENTITY_CHUNK:
+            return self._chunk_name_label(attrs, node_name)
         return node_name
 
     def _decorate_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
         node_type_key = str(node.get("type", ""))
         node_name = str(node.get("name", ""))
+        attrs = node.get("attrs", {}) or {}
         payload = {
             **node,
             "type_label": entity_type_label(node_type_key),
-            "name_label": self._label_node_name(node_type_key, node_name),
+            "name_label": self._label_node_name(node_type_key, node_name, attrs=attrs),
+            "is_evidence": self._is_evidence_node_type(node_type_key),
         }
         return payload
 
@@ -1018,18 +1085,19 @@ class RAGProcessor:
         return {
             "source": source,
             "source_name": source_name,
-            "source_name_label": self._label_node_name(source_type, source_name),
+            "source_name_label": self._label_node_name(source_type, source_name, attrs=source_node.get("attrs", {})),
             "source_type": source_type,
             "source_type_label": entity_type_label(source_type),
             "target": target,
             "target_name": target_name,
-            "target_name_label": self._label_node_name(target_type, target_name),
+            "target_name_label": self._label_node_name(target_type, target_name, attrs=target_node.get("attrs", {})),
             "target_type": target_type,
             "target_type_label": entity_type_label(target_type),
             "relation": relation,
             "relation_label": relation_label(relation),
             "weight": float(edge.get("weight", 1.0)),
             "attrs": edge.get("attrs", {}),
+            "is_evidence_edge": self._is_evidence_node_type(source_type) or self._is_evidence_node_type(target_type),
         }
 
     def get_graph_overview(self, top_n: int = 8) -> Dict[str, Any]:
@@ -1233,6 +1301,7 @@ class RAGProcessor:
         page_size: int = 20,
         node_type: str = None,
         keyword: str = None,
+        include_evidence_nodes: bool = False,
     ) -> Dict[str, Any]:
         self._ensure_graph_store_loaded()
 
@@ -1244,11 +1313,15 @@ class RAGProcessor:
                 str(node.get("type", "")).strip()
                 for node in self.graph_store.nodes.values()
                 if str(node.get("type", "")).strip()
+                and (include_evidence_nodes or not self._is_evidence_node_type(str(node.get("type", ""))))
             }
         )
 
         nodes = []
         for node in self.graph_store.nodes.values():
+            node_type_value = str(node.get("type", ""))
+            if not include_evidence_nodes and self._is_evidence_node_type(node_type_value):
+                continue
             if type_filter and node.get("type") != type_filter:
                 continue
             if keyword_filter:
@@ -1277,29 +1350,31 @@ class RAGProcessor:
         page_size: int = 20,
         relation: str = None,
         keyword: str = None,
+        include_evidence_nodes: bool = False,
     ) -> Dict[str, Any]:
         self._ensure_graph_store_loaded()
 
         relation_filter = relation_key((relation or "").strip())
         keyword_filter = (keyword or "").strip().lower()
+        relation_options_set = set()
+        edge_agg: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
-        relation_options = sorted(
-            {
-                str(edge.get("relation", "")).strip()
-                for neighbors in self.graph_store.edges.values()
-                for edge in neighbors
-                if str(edge.get("relation", "")).strip()
-            }
-        )
-
-        edges = []
         for source, neighbors in self.graph_store.edges.items():
             for edge in neighbors:
+                edge_payload = self._build_edge_payload(source, edge)
+                if not include_evidence_nodes:
+                    if self._is_evidence_node_type(str(edge_payload.get("source_type", ""))):
+                        continue
+                    if self._is_evidence_node_type(str(edge_payload.get("target_type", ""))):
+                        continue
+
                 rel = edge.get("relation", "")
+                relation_value = str(edge_payload.get("relation", "")).strip()
+                if relation_value:
+                    relation_options_set.add(relation_value)
+
                 if relation_filter and rel != relation_filter:
                     continue
-
-                edge_payload = self._build_edge_payload(source, edge)
 
                 if keyword_filter:
                     edge_text = (
@@ -1312,7 +1387,34 @@ class RAGProcessor:
                     if keyword_filter not in edge_text:
                         continue
 
-                edges.append(edge_payload)
+                signature = (
+                    str(edge_payload.get("source", "")),
+                    str(edge_payload.get("target", "")),
+                    relation_value,
+                )
+                attrs = dict(edge_payload.get("attrs", {}) or {})
+                confidence = float(attrs.get("confidence", 0.0) or 0.0)
+
+                if signature not in edge_agg:
+                    new_payload = {**edge_payload}
+                    new_attrs = {**attrs, "evidence_count": 1}
+                    if confidence > 0:
+                        new_attrs["confidence_max"] = confidence
+                    new_payload["attrs"] = new_attrs
+                    edge_agg[signature] = new_payload
+                else:
+                    existing = edge_agg[signature]
+                    existing_attrs = dict(existing.get("attrs", {}) or {})
+                    existing_attrs["evidence_count"] = int(existing_attrs.get("evidence_count", 1)) + 1
+                    prev_conf = float(existing_attrs.get("confidence_max", 0.0) or 0.0)
+                    if confidence > prev_conf:
+                        existing_attrs["confidence_max"] = confidence
+                    existing["attrs"] = existing_attrs
+                    if float(edge_payload.get("weight", 0.0) or 0.0) > float(existing.get("weight", 0.0) or 0.0):
+                        existing["weight"] = edge_payload.get("weight", existing.get("weight", 1.0))
+
+        relation_options = sorted(relation_options_set)
+        edges = list(edge_agg.values())
 
         edges.sort(key=lambda e: (str(e.get("relation", "")), str(e.get("source_name", "")), str(e.get("target_name", ""))))
         total = len(edges)
@@ -1333,6 +1435,7 @@ class RAGProcessor:
         node_ids: List[str] = None,
         hops: int = 2,
         max_nodes: int = 120,
+        include_evidence_nodes: bool = False,
     ) -> Dict[str, Any]:
         self._ensure_graph_store_loaded()
 
@@ -1342,12 +1445,21 @@ class RAGProcessor:
         seed_nodes = set()
         for node_id in node_ids or []:
             if node_id in self.graph_store.nodes:
+                node = self.graph_store.get_node(node_id) or {}
+                if not include_evidence_nodes and self._is_evidence_node_type(str(node.get("type", ""))):
+                    continue
                 seed_nodes.add(node_id)
 
         if query:
             matches = self.graph_store.find_nodes_by_query(query, max_nodes=12)
             for m in matches:
-                seed_nodes.add(m["node_id"])
+                candidate_id = str(m.get("node_id", ""))
+                if not candidate_id:
+                    continue
+                candidate_node = self.graph_store.get_node(candidate_id) or {}
+                if not include_evidence_nodes and self._is_evidence_node_type(str(candidate_node.get("type", ""))):
+                    continue
+                seed_nodes.add(candidate_id)
 
         if not seed_nodes:
             return {
@@ -1370,6 +1482,9 @@ class RAGProcessor:
                 target = edge.get("target")
                 if not target or target not in self.graph_store.nodes:
                     continue
+                target_node = self.graph_store.get_node(target) or {}
+                if not include_evidence_nodes and self._is_evidence_node_type(str(target_node.get("type", ""))):
+                    continue
                 if target in visited:
                     continue
                 visited.add(target)
@@ -1385,19 +1500,42 @@ class RAGProcessor:
             nodes.append(self._decorate_node(node))
         nodes.sort(key=lambda n: (str(n.get("type", "")), str(n.get("name", ""))))
 
-        edge_seen = set()
-        edges = []
+        edge_agg: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         for source in visited:
             for edge in self.graph_store.neighbors(source):
                 target = edge.get("target")
                 relation = edge.get("relation", "")
                 if target not in visited:
                     continue
+                source_node = self.graph_store.get_node(source) or {}
+                target_node = self.graph_store.get_node(target) or {}
+                if not include_evidence_nodes:
+                    if self._is_evidence_node_type(str(source_node.get("type", ""))):
+                        continue
+                    if self._is_evidence_node_type(str(target_node.get("type", ""))):
+                        continue
                 signature = (source, target, relation)
-                if signature in edge_seen:
-                    continue
-                edge_seen.add(signature)
-                edges.append(self._build_edge_payload(source, edge))
+                payload = self._build_edge_payload(source, edge)
+                attrs = dict(payload.get("attrs", {}) or {})
+                confidence = float(attrs.get("confidence", 0.0) or 0.0)
+
+                if signature not in edge_agg:
+                    new_attrs = {**attrs, "evidence_count": 1}
+                    if confidence > 0:
+                        new_attrs["confidence_max"] = confidence
+                    edge_agg[signature] = {**payload, "attrs": new_attrs}
+                else:
+                    existing = edge_agg[signature]
+                    existing_attrs = dict(existing.get("attrs", {}) or {})
+                    existing_attrs["evidence_count"] = int(existing_attrs.get("evidence_count", 1)) + 1
+                    prev_conf = float(existing_attrs.get("confidence_max", 0.0) or 0.0)
+                    if confidence > prev_conf:
+                        existing_attrs["confidence_max"] = confidence
+                    existing["attrs"] = existing_attrs
+                    if float(payload.get("weight", 0.0) or 0.0) > float(existing.get("weight", 0.0) or 0.0):
+                        existing["weight"] = payload.get("weight", existing.get("weight", 1.0))
+
+        edges = list(edge_agg.values())
 
         edges.sort(key=lambda e: (str(e.get("relation", "")), str(e.get("source_name", "")), str(e.get("target_name", ""))))
 
@@ -1417,6 +1555,7 @@ class RAGProcessor:
         target_query: str = "",
         max_hops: int = 4,
         max_candidates: int = 5,
+        include_evidence_nodes: bool = False,
     ) -> Dict[str, Any]:
         self._ensure_graph_store_loaded()
 
@@ -1427,11 +1566,13 @@ class RAGProcessor:
             node_id=source_node_id,
             query=source_query,
             max_candidates=safe_candidates,
+            include_evidence_nodes=include_evidence_nodes,
         )
         resolved_target_id, target_candidates = self._resolve_graph_node(
             node_id=target_node_id,
             query=target_query,
             max_candidates=safe_candidates,
+            include_evidence_nodes=include_evidence_nodes,
         )
 
         result: Dict[str, Any] = {
@@ -1445,6 +1586,7 @@ class RAGProcessor:
             "path_text": "",
             "hops": 0,
             "max_hops": safe_hops,
+            "include_evidence_nodes": bool(include_evidence_nodes),
         }
 
         if not resolved_source_id or not resolved_target_id:
@@ -1456,6 +1598,7 @@ class RAGProcessor:
             target_id=resolved_target_id,
             max_hops=safe_hops,
             incoming_index=incoming_index,
+            include_evidence_nodes=include_evidence_nodes,
         )
         if not path:
             return result

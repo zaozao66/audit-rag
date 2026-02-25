@@ -221,6 +221,18 @@ select {
   gap: 8px;
 }
 
+.checkbox-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.graph-scope-toggle {
+  margin-top: -2px;
+}
+
 .actions-row {
   margin-top: 12px;
   display: flex;

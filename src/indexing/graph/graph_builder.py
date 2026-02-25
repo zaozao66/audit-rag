@@ -65,6 +65,9 @@ class GraphBuilder:
                     "title": doc.get("title", ""),
                     "semantic_boundary": doc.get("semantic_boundary", ""),
                     "page_nos": doc.get("page_nos", []),
+                    "header": doc.get("header", ""),
+                    "section_path": doc.get("section_path", []),
+                    "text_preview": text[:120] + ("..." if len(text) > 120 else ""),
                 },
             )
 

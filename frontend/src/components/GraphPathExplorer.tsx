@@ -1,18 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getGraphPath } from '../api/rag';
 import type { GraphPathResponse } from '../types/rag';
 
 interface GraphPathExplorerProps {
   onSelectNode?: (nodeId: string) => void;
+  includeEvidenceNodes?: boolean;
 }
 
-export function GraphPathExplorer({ onSelectNode }: GraphPathExplorerProps) {
+export function GraphPathExplorer({ onSelectNode, includeEvidenceNodes = false }: GraphPathExplorerProps) {
   const [sourceQuery, setSourceQuery] = useState('');
   const [targetQuery, setTargetQuery] = useState('');
   const [maxHops, setMaxHops] = useState(4);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<GraphPathResponse | null>(null);
+
+  useEffect(() => {
+    setResult(null);
+    setError('');
+  }, [includeEvidenceNodes]);
 
   const run = async () => {
     const from = sourceQuery.trim();
@@ -28,7 +34,8 @@ export function GraphPathExplorer({ onSelectNode }: GraphPathExplorerProps) {
       const data = await getGraphPath({
         sourceQuery: from,
         targetQuery: to,
-        maxHops
+        maxHops,
+        includeEvidenceNodes
       });
       setResult(data);
     } catch (err) {
@@ -42,7 +49,9 @@ export function GraphPathExplorer({ onSelectNode }: GraphPathExplorerProps) {
     <article className="graph-section graph-path-explorer">
       <header className="graph-section-header">
         <h3>路径探索</h3>
-        <small className="muted">查找两类实体之间的最短关联路径</small>
+        <small className="muted">
+          查找两类实体之间的最短关联路径（{includeEvidenceNodes ? '含证据层' : '语义层'}）
+        </small>
       </header>
 
       <div className="form-grid">

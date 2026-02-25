@@ -143,6 +143,7 @@ export interface GraphNodeItem {
   name: string;
   type_label?: string;
   name_label?: string;
+  is_evidence?: boolean;
   attrs: Record<string, unknown>;
 }
 
@@ -162,6 +163,7 @@ export interface GraphEdgeItem {
   weight: number;
   attrs?: Record<string, unknown>;
   direction?: 'forward' | 'reverse';
+  is_evidence_edge?: boolean;
 }
 
 export interface KeyLabelOption {
@@ -271,6 +273,7 @@ export interface GraphPathResponse {
   path_text: string;
   hops: number;
   max_hops: number;
+  include_evidence_nodes?: boolean;
 }
 
 export interface DocumentRecord {

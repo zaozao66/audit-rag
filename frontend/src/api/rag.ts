@@ -213,12 +213,14 @@ export function getGraphNodes(params: {
   pageSize?: number;
   nodeType?: string;
   keyword?: string;
+  includeEvidenceNodes?: boolean;
 }) {
   const query = new URLSearchParams();
   query.set('page', String(params.page ?? 1));
   query.set('page_size', String(params.pageSize ?? 20));
   if (params.nodeType?.trim()) query.set('node_type', params.nodeType.trim());
   if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
+  query.set('include_evidence_nodes', String(Boolean(params.includeEvidenceNodes)));
   return apiFetch<GraphNodesResponse>(`/graph/nodes?${query.toString()}`);
 }
 
@@ -227,12 +229,14 @@ export function getGraphEdges(params: {
   pageSize?: number;
   relation?: string;
   keyword?: string;
+  includeEvidenceNodes?: boolean;
 }) {
   const query = new URLSearchParams();
   query.set('page', String(params.page ?? 1));
   query.set('page_size', String(params.pageSize ?? 20));
   if (params.relation?.trim()) query.set('relation', params.relation.trim());
   if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
+  query.set('include_evidence_nodes', String(Boolean(params.includeEvidenceNodes)));
   return apiFetch<GraphEdgesResponse>(`/graph/edges?${query.toString()}`);
 }
 
@@ -241,6 +245,7 @@ export function getGraphSubgraph(payload: {
   nodeIds?: string[];
   hops?: number;
   maxNodes?: number;
+  includeEvidenceNodes?: boolean;
 }) {
   return apiFetch<GraphSubgraphResponse>('/graph/subgraph', {
     method: 'POST',
@@ -249,7 +254,8 @@ export function getGraphSubgraph(payload: {
       query: payload.query,
       node_ids: payload.nodeIds ?? [],
       hops: payload.hops ?? 2,
-      max_nodes: payload.maxNodes ?? 120
+      max_nodes: payload.maxNodes ?? 120,
+      include_evidence_nodes: Boolean(payload.includeEvidenceNodes)
     })
   });
 }
@@ -274,6 +280,7 @@ export function getGraphPath(payload: {
   targetQuery?: string;
   maxHops?: number;
   maxCandidates?: number;
+  includeEvidenceNodes?: boolean;
 }) {
   return apiFetch<GraphPathResponse>('/graph/path', {
     method: 'POST',
@@ -284,7 +291,8 @@ export function getGraphPath(payload: {
       source_query: payload.sourceQuery ?? '',
       target_query: payload.targetQuery ?? '',
       max_hops: payload.maxHops ?? 4,
-      max_candidates: payload.maxCandidates ?? 5
+      max_candidates: payload.maxCandidates ?? 5,
+      include_evidence_nodes: Boolean(payload.includeEvidenceNodes)
     })
   });
 }

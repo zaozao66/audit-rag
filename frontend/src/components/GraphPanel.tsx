@@ -20,8 +20,10 @@ interface GraphPanelProps {
 }
 
 const PAGE_SIZE = 20;
+const EVIDENCE_NODE_TYPES = new Set(['chunk', 'document']);
 
 export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChanged }: GraphPanelProps) {
+  const [includeEvidenceNodes, setIncludeEvidenceNodes] = useState(false);
   const [nodeKeyword, setNodeKeyword] = useState('');
   const [nodeType, setNodeType] = useState('');
   const [nodePage, setNodePage] = useState(1);
@@ -61,7 +63,10 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
   const totalEdgePages = Math.max(1, Math.ceil(edgesTotal / PAGE_SIZE));
 
   const discoveredNodeTypes = useMemo(() => {
-    const set = new Set<string>(graphTypes);
+    const initialTypes = includeEvidenceNodes
+      ? graphTypes
+      : graphTypes.filter((item) => !EVIDENCE_NODE_TYPES.has(item));
+    const set = new Set<string>(initialTypes);
     for (const item of Object.keys(nodeTypeOptions)) {
       if (item) set.add(item);
     }
@@ -72,7 +77,7 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
       if (node.type) set.add(node.type);
     }
     return Array.from(set).sort();
-  }, [graphTypes, nodeTypeOptions, nodes, subgraphNodes]);
+  }, [graphTypes, nodeTypeOptions, nodes, subgraphNodes, includeEvidenceNodes]);
 
   const nodeTypeLabelMap = useMemo(() => {
     const map: Record<string, string> = { ...graphTypeLabels, ...nodeTypeOptions };
@@ -123,7 +128,8 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
         page: nodePage,
         pageSize: PAGE_SIZE,
         nodeType,
-        keyword: nodeKeyword
+        keyword: nodeKeyword,
+        includeEvidenceNodes
       });
       setNodes(data.nodes);
       setNodeTypeOptions(
@@ -135,7 +141,7 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
     } finally {
       setNodesLoading(false);
     }
-  }, [nodeKeyword, nodePage, nodeType]);
+  }, [nodeKeyword, nodePage, nodeType, includeEvidenceNodes]);
 
   const loadEdges = useCallback(async () => {
     setEdgesLoading(true);
@@ -145,7 +151,8 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
         page: edgePage,
         pageSize: PAGE_SIZE,
         relation,
-        keyword: edgeKeyword
+        keyword: edgeKeyword,
+        includeEvidenceNodes
       });
       setEdges(data.edges);
       setRelationOptions(
@@ -157,7 +164,7 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
     } finally {
       setEdgesLoading(false);
     }
-  }, [edgeKeyword, edgePage, relation]);
+  }, [edgeKeyword, edgePage, relation, includeEvidenceNodes]);
 
   const loadOverview = useCallback(async () => {
     setOverviewLoading(true);
@@ -200,6 +207,14 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
     void loadOverview();
   }, [loadOverview]);
 
+  useEffect(() => {
+    if (includeEvidenceNodes) return;
+    if (EVIDENCE_NODE_TYPES.has(nodeType)) {
+      setNodeType('');
+      setNodePage(1);
+    }
+  }, [includeEvidenceNodes, nodeType]);
+
   const handleRebuild = async () => {
     setRebuilding(true);
     setError('');
@@ -226,7 +241,8 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
       const data = await getGraphSubgraph({
         query: subgraphQuery.trim(),
         hops: subgraphHops,
-        maxNodes: subgraphMaxNodes
+        maxNodes: subgraphMaxNodes,
+        includeEvidenceNodes
       });
       setSubgraphNodes(data.nodes);
       setSubgraphEdges(data.edges);
@@ -260,6 +276,22 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
       </header>
 
       <GraphOverview overview={overview} loading={overviewLoading} onRefresh={() => { void loadOverview(); }} />
+
+      <div className="checkbox-row graph-scope-toggle">
+        <input
+          id="graph-scope-toggle"
+          type="checkbox"
+          checked={includeEvidenceNodes}
+          onChange={(event) => {
+            setIncludeEvidenceNodes(event.target.checked);
+            setNodePage(1);
+            setEdgePage(1);
+          }}
+        />
+        <label htmlFor="graph-scope-toggle">
+          显示证据层节点（document/chunk）
+        </label>
+      </div>
 
       {error ? <p className="error-text">{error}</p> : null}
 
@@ -370,7 +402,12 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
                         {edge.source_name_label ?? edge.source_name}
                       </button>
                     </td>
-                    <td>{edge.relation_label ?? relationLabelMap[edge.relation] ?? edge.relation}</td>
+                    <td>
+                      {edge.relation_label ?? relationLabelMap[edge.relation] ?? edge.relation}
+                      {Number((edge.attrs as { evidence_count?: number } | undefined)?.evidence_count || 0) > 1 ? (
+                        <small className="muted"> ×{Number((edge.attrs as { evidence_count?: number }).evidence_count)}</small>
+                      ) : null}
+                    </td>
                     <td>
                       <button type="button" className="link-btn" onClick={() => { void openNodeDetail(edge.target); }}>
                         {edge.target_name_label ?? edge.target_name}
@@ -480,7 +517,12 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
                         {edge.source_name_label ?? edge.source_name}
                       </button>
                     </td>
-                    <td>{edge.relation_label ?? relationLabelMap[edge.relation] ?? edge.relation}</td>
+                    <td>
+                      {edge.relation_label ?? relationLabelMap[edge.relation] ?? edge.relation}
+                      {Number((edge.attrs as { evidence_count?: number } | undefined)?.evidence_count || 0) > 1 ? (
+                        <small className="muted"> ×{Number((edge.attrs as { evidence_count?: number }).evidence_count)}</small>
+                      ) : null}
+                    </td>
                     <td>
                       <button type="button" className="link-btn" onClick={() => { void openNodeDetail(edge.target); }}>
                         {edge.target_name_label ?? edge.target_name}
@@ -500,6 +542,7 @@ export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChang
       </article>
 
       <GraphPathExplorer
+        includeEvidenceNodes={includeEvidenceNodes}
         onSelectNode={(nodeId) => {
           void openNodeDetail(nodeId);
         }}
