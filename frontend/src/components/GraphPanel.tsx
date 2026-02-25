@@ -1,19 +1,32 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getGraphEdges, getGraphNodes, getGraphSubgraph, rebuildGraphIndex } from '../api/rag';
-import type { GraphEdgeItem, GraphNodeItem } from '../types/rag';
+import {
+  getGraphEdges,
+  getGraphNodeDetail,
+  getGraphNodes,
+  getGraphOverview,
+  getGraphSubgraph,
+  rebuildGraphIndex
+} from '../api/rag';
+import type { GraphEdgeItem, GraphNodeDetailResponse, GraphNodeItem, GraphOverviewResponse } from '../types/rag';
+import { GraphCanvas } from './GraphCanvas';
+import { GraphNodeDrawer } from './GraphNodeDrawer';
+import { GraphOverview } from './GraphOverview';
+import { GraphPathExplorer } from './GraphPathExplorer';
 
 interface GraphPanelProps {
   graphTypes?: string[];
+  graphTypeLabels?: Record<string, string>;
   onGraphChanged?: () => void;
 }
 
 const PAGE_SIZE = 20;
 
-export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps) {
+export function GraphPanel({ graphTypes = [], graphTypeLabels = {}, onGraphChanged }: GraphPanelProps) {
   const [nodeKeyword, setNodeKeyword] = useState('');
   const [nodeType, setNodeType] = useState('');
   const [nodePage, setNodePage] = useState(1);
   const [nodes, setNodes] = useState<GraphNodeItem[]>([]);
+  const [nodeTypeOptions, setNodeTypeOptions] = useState<Record<string, string>>({});
   const [nodesTotal, setNodesTotal] = useState(0);
   const [nodesLoading, setNodesLoading] = useState(false);
 
@@ -21,6 +34,7 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
   const [relation, setRelation] = useState('');
   const [edgePage, setEdgePage] = useState(1);
   const [edges, setEdges] = useState<GraphEdgeItem[]>([]);
+  const [relationOptions, setRelationOptions] = useState<Record<string, string>>({});
   const [edgesTotal, setEdgesTotal] = useState(0);
   const [edgesLoading, setEdgesLoading] = useState(false);
 
@@ -32,6 +46,14 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
   const [subgraphSeedNodes, setSubgraphSeedNodes] = useState<string[]>([]);
   const [subgraphLoading, setSubgraphLoading] = useState(false);
 
+  const [overview, setOverview] = useState<GraphOverviewResponse | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [detail, setDetail] = useState<GraphNodeDetailResponse | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState('');
+
   const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState('');
 
@@ -40,6 +62,9 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
 
   const discoveredNodeTypes = useMemo(() => {
     const set = new Set<string>(graphTypes);
+    for (const item of Object.keys(nodeTypeOptions)) {
+      if (item) set.add(item);
+    }
     for (const node of nodes) {
       if (node.type) set.add(node.type);
     }
@@ -47,10 +72,25 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
       if (node.type) set.add(node.type);
     }
     return Array.from(set).sort();
-  }, [graphTypes, nodes, subgraphNodes]);
+  }, [graphTypes, nodeTypeOptions, nodes, subgraphNodes]);
+
+  const nodeTypeLabelMap = useMemo(() => {
+    const map: Record<string, string> = { ...graphTypeLabels, ...nodeTypeOptions };
+    for (const node of nodes) {
+      if (node.type && node.type_label) {
+        map[node.type] = node.type_label;
+      }
+    }
+    for (const node of subgraphNodes) {
+      if (node.type && node.type_label) {
+        map[node.type] = node.type_label;
+      }
+    }
+    return map;
+  }, [graphTypeLabels, nodeTypeOptions, nodes, subgraphNodes]);
 
   const discoveredRelations = useMemo(() => {
-    const set = new Set<string>();
+    const set = new Set<string>(Object.keys(relationOptions));
     for (const edge of edges) {
       if (edge.relation) set.add(edge.relation);
     }
@@ -58,7 +98,22 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
       if (edge.relation) set.add(edge.relation);
     }
     return Array.from(set).sort();
-  }, [edges, subgraphEdges]);
+  }, [relationOptions, edges, subgraphEdges]);
+
+  const relationLabelMap = useMemo(() => {
+    const map: Record<string, string> = { ...relationOptions };
+    for (const edge of edges) {
+      if (edge.relation && edge.relation_label) {
+        map[edge.relation] = edge.relation_label;
+      }
+    }
+    for (const edge of subgraphEdges) {
+      if (edge.relation && edge.relation_label) {
+        map[edge.relation] = edge.relation_label;
+      }
+    }
+    return map;
+  }, [relationOptions, edges, subgraphEdges]);
 
   const loadNodes = useCallback(async () => {
     setNodesLoading(true);
@@ -71,6 +126,9 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
         keyword: nodeKeyword
       });
       setNodes(data.nodes);
+      setNodeTypeOptions(
+        Object.fromEntries((data.type_options ?? []).map((item) => [item.value, item.label]))
+      );
       setNodesTotal(data.total);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载图节点失败');
@@ -90,6 +148,9 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
         keyword: edgeKeyword
       });
       setEdges(data.edges);
+      setRelationOptions(
+        Object.fromEntries((data.relation_options ?? []).map((item) => [item.value, item.label]))
+      );
       setEdgesTotal(data.total);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载图边失败');
@@ -97,6 +158,35 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
       setEdgesLoading(false);
     }
   }, [edgeKeyword, edgePage, relation]);
+
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true);
+    try {
+      const data = await getGraphOverview({ topN: 8 });
+      setOverview(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载图谱总览失败');
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, []);
+
+  const openNodeDetail = useCallback(async (nodeId: string) => {
+    if (!nodeId) return;
+    setDetailOpen(true);
+    setDetailLoading(true);
+    setDetailError('');
+    setDetail(null);
+    setSelectedNodeId(nodeId);
+    try {
+      const data = await getGraphNodeDetail(nodeId, 120);
+      setDetail(data);
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : '加载节点详情失败');
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadNodes();
@@ -106,12 +196,16 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
     void loadEdges();
   }, [loadEdges]);
 
+  useEffect(() => {
+    void loadOverview();
+  }, [loadOverview]);
+
   const handleRebuild = async () => {
     setRebuilding(true);
     setError('');
     try {
       await rebuildGraphIndex();
-      await Promise.all([loadNodes(), loadEdges()]);
+      await Promise.all([loadNodes(), loadEdges(), loadOverview()]);
       onGraphChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : '重建图索引失败');
@@ -152,11 +246,20 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
           <button className="secondary-btn" onClick={handleRebuild} disabled={rebuilding || nodesLoading || edgesLoading}>
             {rebuilding ? '重建中...' : '重建图索引'}
           </button>
-          <button onClick={() => { void loadNodes(); void loadEdges(); }} disabled={nodesLoading || edgesLoading || rebuilding}>
+          <button
+            onClick={() => {
+              void loadNodes();
+              void loadEdges();
+              void loadOverview();
+            }}
+            disabled={nodesLoading || edgesLoading || rebuilding}
+          >
             {nodesLoading || edgesLoading ? '刷新中...' : '刷新'}
           </button>
         </div>
       </header>
+
+      <GraphOverview overview={overview} loading={overviewLoading} onRefresh={() => { void loadOverview(); }} />
 
       {error ? <p className="error-text">{error}</p> : null}
 
@@ -173,7 +276,7 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
               <select value={nodeType} onChange={(e) => { setNodeType(e.target.value); setNodePage(1); }}>
                 <option value="">全部</option>
                 {discoveredNodeTypes.map((item) => (
-                  <option key={item} value={item}>{item}</option>
+                  <option key={item} value={item}>{nodeTypeLabelMap[item] ?? item}</option>
                 ))}
               </select>
             </label>
@@ -192,16 +295,20 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>Type</th>
-                  <th>Name</th>
+                  <th>类型</th>
+                  <th>名称</th>
                 </tr>
               </thead>
               <tbody>
                 {nodes.map((node) => (
-                  <tr key={node.id}>
+                  <tr
+                    key={node.id}
+                    className={selectedNodeId === node.id ? 'row-active' : ''}
+                    onClick={() => { void openNodeDetail(node.id); }}
+                  >
                     <td>{node.id}</td>
-                    <td>{node.type}</td>
-                    <td>{node.name}</td>
+                    <td>{node.type_label ?? nodeTypeLabelMap[node.type] ?? node.type}</td>
+                    <td>{node.name_label ?? node.name}</td>
                   </tr>
                 ))}
                 {!nodesLoading && nodes.length === 0 ? (
@@ -232,7 +339,7 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
               <select value={relation} onChange={(e) => { setRelation(e.target.value); setEdgePage(1); }}>
                 <option value="">全部</option>
                 {discoveredRelations.map((item) => (
-                  <option key={item} value={item}>{item}</option>
+                  <option key={item} value={item}>{relationLabelMap[item] ?? item}</option>
                 ))}
               </select>
             </label>
@@ -250,17 +357,25 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
             <table className="graph-table">
               <thead>
                 <tr>
-                  <th>Source</th>
-                  <th>Relation</th>
-                  <th>Target</th>
+                  <th>起点</th>
+                  <th>关系</th>
+                  <th>终点</th>
                 </tr>
               </thead>
               <tbody>
                 {edges.map((edge, idx) => (
                   <tr key={`${edge.source}-${edge.target}-${edge.relation}-${idx}`}>
-                    <td>{edge.source_name}</td>
-                    <td>{edge.relation}</td>
-                    <td>{edge.target_name}</td>
+                    <td>
+                      <button type="button" className="link-btn" onClick={() => { void openNodeDetail(edge.source); }}>
+                        {edge.source_name_label ?? edge.source_name}
+                      </button>
+                    </td>
+                    <td>{edge.relation_label ?? relationLabelMap[edge.relation] ?? edge.relation}</td>
+                    <td>
+                      <button type="button" className="link-btn" onClick={() => { void openNodeDetail(edge.target); }}>
+                        {edge.target_name_label ?? edge.target_name}
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {!edgesLoading && edges.length === 0 ? (
@@ -292,11 +407,11 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
             <input value={subgraphQuery} onChange={(e) => setSubgraphQuery(e.target.value)} placeholder="例如：整改 / 采购 / 审计法" />
           </label>
           <label>
-            hops
+            跳数
             <input type="number" min={1} max={4} value={subgraphHops} onChange={(e) => setSubgraphHops(Number(e.target.value || 2))} />
           </label>
           <label>
-            max_nodes
+            最大节点数
             <input type="number" min={20} max={300} value={subgraphMaxNodes} onChange={(e) => setSubgraphMaxNodes(Number(e.target.value || 120))} />
           </label>
         </div>
@@ -311,20 +426,32 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
           <span><strong>子图边</strong>: {subgraphEdges.length}</span>
         </div>
 
+        <GraphCanvas
+          nodes={subgraphNodes}
+          edges={subgraphEdges}
+          seedNodeIds={subgraphSeedNodes}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={(nodeId) => { void openNodeDetail(nodeId); }}
+        />
+
         <div className="graph-browser-grid">
           <div className="graph-table-wrap">
             <table className="graph-table">
               <thead>
                 <tr>
-                  <th>Node</th>
-                  <th>Type</th>
+                  <th>节点</th>
+                  <th>类型</th>
                 </tr>
               </thead>
               <tbody>
                 {subgraphNodes.map((node) => (
-                  <tr key={`sub-node-${node.id}`}>
-                    <td>{node.name}</td>
-                    <td>{node.type}</td>
+                  <tr
+                    key={`sub-node-${node.id}`}
+                    className={selectedNodeId === node.id ? 'row-active' : ''}
+                    onClick={() => { void openNodeDetail(node.id); }}
+                  >
+                    <td>{node.name_label ?? node.name}</td>
+                    <td>{node.type_label ?? nodeTypeLabelMap[node.type] ?? node.type}</td>
                   </tr>
                 ))}
                 {!subgraphLoading && subgraphNodes.length === 0 ? (
@@ -340,17 +467,25 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
             <table className="graph-table">
               <thead>
                 <tr>
-                  <th>Source</th>
-                  <th>Relation</th>
-                  <th>Target</th>
+                  <th>起点</th>
+                  <th>关系</th>
+                  <th>终点</th>
                 </tr>
               </thead>
               <tbody>
                 {subgraphEdges.map((edge, idx) => (
                   <tr key={`sub-edge-${edge.source}-${edge.target}-${edge.relation}-${idx}`}>
-                    <td>{edge.source_name}</td>
-                    <td>{edge.relation}</td>
-                    <td>{edge.target_name}</td>
+                    <td>
+                      <button type="button" className="link-btn" onClick={() => { void openNodeDetail(edge.source); }}>
+                        {edge.source_name_label ?? edge.source_name}
+                      </button>
+                    </td>
+                    <td>{edge.relation_label ?? relationLabelMap[edge.relation] ?? edge.relation}</td>
+                    <td>
+                      <button type="button" className="link-btn" onClick={() => { void openNodeDetail(edge.target); }}>
+                        {edge.target_name_label ?? edge.target_name}
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {!subgraphLoading && subgraphEdges.length === 0 ? (
@@ -363,6 +498,25 @@ export function GraphPanel({ graphTypes = [], onGraphChanged }: GraphPanelProps)
           </div>
         </div>
       </article>
+
+      <GraphPathExplorer
+        onSelectNode={(nodeId) => {
+          void openNodeDetail(nodeId);
+        }}
+      />
+
+      <GraphNodeDrawer
+        open={detailOpen}
+        detail={detail}
+        loading={detailLoading}
+        error={detailError}
+        onClose={() => {
+          setDetailOpen(false);
+          setDetailError('');
+          setDetail(null);
+          setSelectedNodeId('');
+        }}
+      />
     </section>
   );
 }

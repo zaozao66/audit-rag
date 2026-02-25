@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { streamAskWithLlm } from '../api/rag';
 import type { CitationItem, StreamProgressEvent } from '../types/rag';
 import { renderMarkdownToHtml } from '../utils/markdown';
@@ -10,6 +11,49 @@ const STAGE_LABEL: Record<StreamProgressEvent['stage'], string> = {
   retrieval: '检索召回',
   generation: '回答生成'
 };
+
+interface CitationListProps {
+  items: CitationItem[];
+  keyPrefix: string;
+  showScores?: boolean;
+  useAnchorId?: boolean;
+  anchorPrefix?: string;
+}
+
+function CitationList({
+  items,
+  keyPrefix,
+  showScores = false,
+  useAnchorId = false,
+  anchorPrefix = ''
+}: CitationListProps) {
+  return (
+    <div className="citation-list">
+      {items.map((item) => (
+        <article
+          key={`${keyPrefix}-${item.source_id}`}
+          id={useAnchorId ? `${anchorPrefix}cite-${item.source_id}` : undefined}
+          className="citation-card"
+        >
+          <header>
+            <span>[{item.source_id}]</span>
+            <small>{item.filename || item.title || item.doc_id}</small>
+          </header>
+          <p>{item.text_preview || '无文本片段'}</p>
+
+          {showScores ? (
+            <footer>
+              <small>doc_type: {item.doc_type || '-'}</small>
+              <small>score: {item.score?.toFixed?.(4) ?? '-'}</small>
+              {item.vector_score !== undefined ? <small>vector: {item.vector_score?.toFixed?.(4)}</small> : null}
+              {item.graph_score !== undefined ? <small>graph: {item.graph_score?.toFixed?.(4)}</small> : null}
+            </footer>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
 
 export function SearchPanel() {
   const [activeTab, setActiveTab] = useState<AnswerTab>('single');
@@ -38,8 +82,36 @@ export function SearchPanel() {
   });
 
   const renderedHtml = useMemo(() => renderMarkdownToHtml(answerMd), [answerMd]);
-  const vectorRenderedHtml = useMemo(() => renderMarkdownToHtml(vectorAnswerMd), [vectorAnswerMd]);
-  const hybridRenderedHtml = useMemo(() => renderMarkdownToHtml(hybridAnswerMd), [hybridAnswerMd]);
+  const vectorRenderedHtml = useMemo(
+    () => renderMarkdownToHtml(vectorAnswerMd, { citationAnchorPrefix: 'vector-' }),
+    [vectorAnswerMd]
+  );
+  const hybridRenderedHtml = useMemo(
+    () => renderMarkdownToHtml(hybridAnswerMd, { citationAnchorPrefix: 'hybrid-' }),
+    [hybridAnswerMd]
+  );
+
+  const onCitationRefClick = (event: ReactMouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null;
+    const anchor = target?.closest('a.cite-ref') as HTMLAnchorElement | null;
+    if (!anchor) return;
+
+    const href = anchor.getAttribute('href') || '';
+    if (!href.startsWith('#')) return;
+
+    const targetId = href.slice(1);
+    if (!targetId) return;
+
+    const targetEl = document.getElementById(targetId);
+    if (!targetEl) return;
+
+    event.preventDefault();
+    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    targetEl.classList.add('citation-target');
+    window.setTimeout(() => {
+      targetEl.classList.remove('citation-target');
+    }, 1200);
+  };
 
   const run = async () => {
     const cleanQuery = query.trim();
@@ -239,29 +311,17 @@ export function SearchPanel() {
           {error ? <p className="error-text">{error}</p> : null}
 
           {hasStarted ? (
-            <div className="answer-box markdown-body" dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }} />
+            <div
+              className="answer-box markdown-body"
+              onClick={onCitationRefClick}
+              dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }}
+            />
           ) : null}
 
           {hasStarted && citations.length > 0 ? (
             <div className="citation-board">
               <strong>引用来源</strong>
-              <div className="citation-list">
-                {citations.map((item) => (
-                  <article key={item.source_id} id={`cite-${item.source_id}`} className="citation-card">
-                    <header>
-                      <span>[{item.source_id}]</span>
-                      <small>{item.filename || item.title || item.doc_id}</small>
-                    </header>
-                    <p>{item.text_preview || '无文本片段'}</p>
-                    <footer>
-                      <small>doc_type: {item.doc_type || '-'}</small>
-                      <small>score: {item.score?.toFixed?.(4) ?? '-'}</small>
-                      {item.vector_score !== undefined ? <small>vector: {item.vector_score?.toFixed?.(4)}</small> : null}
-                      {item.graph_score !== undefined ? <small>graph: {item.graph_score?.toFixed?.(4)}</small> : null}
-                    </footer>
-                  </article>
-                ))}
-              </div>
+              <CitationList items={citations} keyPrefix="single" showScores useAnchorId anchorPrefix="" />
             </div>
           ) : null}
         </>
@@ -283,23 +343,19 @@ export function SearchPanel() {
                   <h3>向量检索回答</h3>
                   <span className="muted">mode: vector</span>
                 </header>
-                <div
-                  className="answer-box markdown-body"
+                <section
+                  className="compare-answer answer-box markdown-body"
+                  onClick={onCitationRefClick}
                   dangerouslySetInnerHTML={{ __html: vectorRenderedHtml || '<p class="muted">等待回答...</p>' }}
                 />
-                {vectorCitations.length > 0 ? (
-                  <div className="citation-list">
-                    {vectorCitations.map((item) => (
-                      <article key={`vector-${item.source_id}`} className="citation-card">
-                        <header>
-                          <span>[{item.source_id}]</span>
-                          <small>{item.filename || item.title || item.doc_id}</small>
-                        </header>
-                        <p>{item.text_preview || '无文本片段'}</p>
-                      </article>
-                    ))}
-                  </div>
-                ) : null}
+                <section className="compare-citations">
+                  <strong>引用来源</strong>
+                  {vectorCitations.length > 0 ? (
+                    <CitationList items={vectorCitations} keyPrefix="vector" useAnchorId anchorPrefix="vector-" />
+                  ) : (
+                    <p className="muted">暂无引用</p>
+                  )}
+                </section>
               </article>
 
               <article className="compare-card">
@@ -307,23 +363,19 @@ export function SearchPanel() {
                   <h3>向量 + GraphRAG 回答</h3>
                   <span className="muted">mode: hybrid</span>
                 </header>
-                <div
-                  className="answer-box markdown-body"
+                <section
+                  className="compare-answer answer-box markdown-body"
+                  onClick={onCitationRefClick}
                   dangerouslySetInnerHTML={{ __html: hybridRenderedHtml || '<p class="muted">等待回答...</p>' }}
                 />
-                {hybridCitations.length > 0 ? (
-                  <div className="citation-list">
-                    {hybridCitations.map((item) => (
-                      <article key={`hybrid-${item.source_id}`} className="citation-card">
-                        <header>
-                          <span>[{item.source_id}]</span>
-                          <small>{item.filename || item.title || item.doc_id}</small>
-                        </header>
-                        <p>{item.text_preview || '无文本片段'}</p>
-                      </article>
-                    ))}
-                  </div>
-                ) : null}
+                <section className="compare-citations">
+                  <strong>引用来源</strong>
+                  {hybridCitations.length > 0 ? (
+                    <CitationList items={hybridCitations} keyPrefix="hybrid" useAnchorId anchorPrefix="hybrid-" />
+                  ) : (
+                    <p className="muted">暂无引用</p>
+                  )}
+                </section>
               </article>
             </div>
           ) : null}

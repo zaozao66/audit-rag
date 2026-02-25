@@ -2,6 +2,7 @@ from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional
 
 from src.core.schemas import SearchResult
+from src.indexing.graph.ontology import RELATION_WEIGHTS
 from src.indexing.graph.graph_store import GraphStore
 
 
@@ -75,18 +76,18 @@ class GraphRetriever:
         allow_chunks,
         chunk_scores,
     ):
-        q = deque([(seed_id, 0)])
-        seen_depth = {seed_id: 0}
+        q = deque([(seed_id, 0, 1.0)])
+        seen_score = {seed_id: 1.0}
 
         while q:
-            current, depth = q.popleft()
+            current, depth, path_weight = q.popleft()
             node = self.graph_store.get_node(current)
             if not node:
                 continue
 
             if node.get("type") == "chunk":
                 if not allow_chunks or current in allow_chunks:
-                    chunk_scores[current] += seed_score / float(depth + 1)
+                    chunk_scores[current] += seed_score * path_weight / float(depth + 1)
 
             if depth >= hops:
                 continue
@@ -95,9 +96,13 @@ class GraphRetriever:
                 nxt = edge.get("target")
                 if not nxt:
                     continue
+                relation = str(edge.get("relation", ""))
+                relation_weight = RELATION_WEIGHTS.get(relation, 1.0)
+                edge_weight = float(edge.get("weight", 1.0))
+                next_weight = path_weight * relation_weight * edge_weight
                 next_depth = depth + 1
-                best = seen_depth.get(nxt)
-                if best is not None and best <= next_depth:
+                best = seen_score.get(nxt)
+                if best is not None and best >= next_weight and next_depth > 0:
                     continue
-                seen_depth[nxt] = next_depth
-                q.append((nxt, next_depth))
+                seen_score[nxt] = next_weight
+                q.append((nxt, next_depth, next_weight))

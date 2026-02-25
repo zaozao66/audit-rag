@@ -427,11 +427,17 @@ select {
   color: var(--muted);
 }
 
+.citation-card.citation-target {
+  outline: 2px solid rgba(12, 124, 89, 0.45);
+  box-shadow: 0 0 0 3px rgba(12, 124, 89, 0.12);
+}
+
 .compare-board {
   margin-top: 14px;
   display: grid;
   gap: 12px;
   grid-template-columns: 1fr;
+  align-items: stretch;
 }
 
 @media (min-width: 980px) {
@@ -447,6 +453,7 @@ select {
   padding: 12px;
   display: grid;
   gap: 10px;
+  align-content: start;
 }
 
 .compare-card header {
@@ -454,6 +461,26 @@ select {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
+}
+
+.compare-answer {
+  min-height: 260px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.compare-citations {
+  border-top: 1px solid rgba(84, 62, 43, 0.16);
+  padding-top: 8px;
+  display: grid;
+  gap: 8px;
+  min-height: 180px;
+}
+
+.compare-citations .citation-list {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .metrics-grid {
@@ -500,6 +527,16 @@ select {
   display: flex;
   gap: 8px;
   font-size: 13px;
+}
+
+.link-chip {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.link-chip:hover {
+  background: rgba(12, 124, 89, 0.14);
+  transform: none;
 }
 
 .segmented {
@@ -647,11 +684,114 @@ select {
   margin-top: 4px;
 }
 
+.graph-path-explorer {
+  margin-top: 4px;
+}
+
+.graph-path-result {
+  display: grid;
+  gap: 10px;
+}
+
+.graph-path-text {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.graph-overview {
+  gap: 12px;
+}
+
+.graph-overview-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 980px) {
+  .graph-overview-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.graph-overview-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.graph-overview-card h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
 .graph-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.graph-canvas-wrap {
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.graph-canvas-hint {
+  margin-top: -4px;
+}
+
+.graph-canvas {
+  width: 100%;
+  min-height: 320px;
+  border-radius: 8px;
+  border: 1px solid rgba(84, 62, 43, 0.12);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(12, 124, 89, 0.08), transparent 55%),
+    linear-gradient(180deg, #fff 0%, #f6f3ed 100%);
+  cursor: grab;
+}
+
+.graph-canvas:active {
+  cursor: grabbing;
+}
+
+.graph-canvas-edge {
+  stroke: rgba(84, 62, 43, 0.3);
+  stroke-width: 1.2;
+}
+
+.graph-canvas-node {
+  cursor: pointer;
+}
+
+.graph-canvas-node circle {
+  stroke: rgba(47, 36, 27, 0.5);
+  stroke-width: 1;
+}
+
+.graph-canvas-node text {
+  font-size: 11px;
+  fill: #31261d;
+  user-select: none;
+  pointer-events: none;
+}
+
+.graph-canvas-node.selected circle {
+  stroke: #111827;
+  stroke-width: 2;
 }
 
 .graph-table-wrap {
@@ -683,11 +823,82 @@ select {
   z-index: 1;
 }
 
+.graph-table tbody tr.row-active {
+  background: rgba(12, 124, 89, 0.1);
+}
+
+.graph-table tbody tr:hover {
+  background: rgba(12, 124, 89, 0.06);
+}
+
+.link-btn {
+  background: transparent;
+  color: var(--accent-strong);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  background: transparent;
+  color: var(--accent);
+  transform: none;
+}
+
 .pager-row {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.graph-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(24, 18, 12, 0.45);
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.graph-drawer {
+  width: min(640px, 100vw);
+  height: 100%;
+  background: #f8f5ef;
+  border-left: 1px solid var(--panel-border);
+  box-shadow: -24px 0 40px rgba(31, 24, 17, 0.2);
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+}
+
+.graph-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.graph-drawer-content {
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.graph-drawer-block {
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.graph-drawer-block h4 {
+  margin: 0;
 }
 
 @keyframes slide-in {

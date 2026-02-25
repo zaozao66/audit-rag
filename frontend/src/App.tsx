@@ -107,7 +107,11 @@ export default function App() {
       </section>
 
       <section className={`tab-content ${activeTab === 'graph' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'graph'}>
-        <GraphPanel graphTypes={Object.keys(info?.graph?.in_memory?.by_type ?? {})} onGraphChanged={loadMeta} />
+        <GraphPanel
+          graphTypes={Object.keys(info?.graph?.in_memory?.by_type ?? {})}
+          graphTypeLabels={info?.graph?.in_memory?.by_type_labels ?? {}}
+          onGraphChanged={loadMeta}
+        />
       </section>
     </main>
   );

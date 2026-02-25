@@ -215,6 +215,78 @@ def get_graph_subgraph():
         return jsonify({"error": f"获取子图失败: {str(e)}"}), 500
 
 
+@storage_bp.route('/graph/path', methods=['POST'])
+def get_graph_path():
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        data = request.get_json(silent=True) or {}
+        source_node_id = str(data.get('source_node_id', '') or '')
+        target_node_id = str(data.get('target_node_id', '') or '')
+        source_query = str(data.get('source_query', '') or '')
+        target_query = str(data.get('target_query', '') or '')
+        try:
+            max_hops = int(data.get('max_hops', 4))
+        except (TypeError, ValueError):
+            max_hops = 4
+        try:
+            max_candidates = int(data.get('max_candidates', 5))
+        except (TypeError, ValueError):
+            max_candidates = 5
+
+        max_hops = max(1, min(8, max_hops))
+        max_candidates = max(1, min(10, max_candidates))
+
+        result = rag_processor.get_graph_path(
+            source_node_id=source_node_id,
+            target_node_id=target_node_id,
+            source_query=source_query,
+            target_query=target_query,
+            max_hops=max_hops,
+            max_candidates=max_candidates,
+        )
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        current_app.logger.error("获取图路径失败: %s", e)
+        return jsonify({"error": f"获取图路径失败: {str(e)}"}), 500
+
+
+@storage_bp.route('/graph/overview', methods=['GET'])
+def get_graph_overview():
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        top_n = int(request.args.get('top_n', 8))
+        top_n = max(3, min(50, top_n))
+
+        result = rag_processor.get_graph_overview(top_n=top_n)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        current_app.logger.error("获取图谱总览失败: %s", e)
+        return jsonify({"error": f"获取图谱总览失败: {str(e)}"}), 500
+
+
+@storage_bp.route('/graph/node/<node_id>', methods=['GET'])
+def get_graph_node_detail(node_id: str):
+    try:
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        max_neighbors = int(request.args.get('max_neighbors', 120))
+        max_neighbors = max(20, min(300, max_neighbors))
+
+        result = rag_processor.get_graph_node_detail(node_id=node_id, max_neighbors=max_neighbors)
+        if not result:
+            return jsonify({"error": "节点不存在"}), 404
+
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        current_app.logger.error("获取图节点详情失败: %s", e)
+        return jsonify({"error": f"获取图节点详情失败: {str(e)}"}), 500
+
+
 @storage_bp.route('/upload_store', methods=['POST'])
 def upload_and_store_documents():
     try:

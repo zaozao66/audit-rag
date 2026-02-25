@@ -15,8 +15,17 @@ function sanitizeHref(rawHref: string): string {
   return '#';
 }
 
-function inlineMarkdown(input: string): string {
+function sanitizeAnchorPrefix(prefix: string): string {
+  return (prefix || '').replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+interface RenderMarkdownOptions {
+  citationAnchorPrefix?: string;
+}
+
+function inlineMarkdown(input: string, options?: RenderMarkdownOptions): string {
   let text = escapeHtml(input);
+  const citationPrefix = sanitizeAnchorPrefix(options?.citationAnchorPrefix || '');
 
   text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -25,12 +34,14 @@ function inlineMarkdown(input: string): string {
     const safeHref = sanitizeHref(href);
     return `<a href="${safeHref}" target="_blank" rel="noreferrer">${label}</a>`;
   });
-  text = text.replace(/\[(S\d+)\]/g, '<a class="cite-ref" href="#cite-$1">[$1]</a>');
+  text = text.replace(/\[(S\d+)\]/g, (_matched: string, sourceId: string) => {
+    return `<a class="cite-ref" href="#${citationPrefix}cite-${sourceId}">[${sourceId}]</a>`;
+  });
 
   return text;
 }
 
-export function renderMarkdownToHtml(markdown: string): string {
+export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownOptions): string {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   const html: string[] = [];
 
@@ -70,7 +81,7 @@ export function renderMarkdownToHtml(markdown: string): string {
         quoteLines.push(lines[i].replace(/^>\s?/, ''));
         i += 1;
       }
-      html.push(`<blockquote>${inlineMarkdown(quoteLines.join('<br/>'))}</blockquote>`);
+      html.push(`<blockquote>${inlineMarkdown(quoteLines.join('<br/>'), options)}</blockquote>`);
       continue;
     }
 
@@ -80,7 +91,7 @@ export function renderMarkdownToHtml(markdown: string): string {
         items.push(lines[i].replace(/^\s*[-*+]\s+/, ''));
         i += 1;
       }
-      html.push(`<ul>${items.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`);
+      html.push(`<ul>${items.map((item) => `<li>${inlineMarkdown(item, options)}</li>`).join('')}</ul>`);
       continue;
     }
 
@@ -106,7 +117,7 @@ export function renderMarkdownToHtml(markdown: string): string {
 
         break;
       }
-      html.push(`<ol>${items.map((item) => `<li>${inlineMarkdown(item)}</li>`).join('')}</ol>`);
+      html.push(`<ol>${items.map((item) => `<li>${inlineMarkdown(item, options)}</li>`).join('')}</ol>`);
       continue;
     }
 
@@ -124,7 +135,7 @@ export function renderMarkdownToHtml(markdown: string): string {
       paragraph.push(lines[i]);
       i += 1;
     }
-    html.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
+    html.push(`<p>${inlineMarkdown(paragraph.join(' '), options)}</p>`);
   }
 
   return html.join('\n');

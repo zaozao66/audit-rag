@@ -12,6 +12,7 @@ interface SystemPanelProps {
 export function SystemPanel({ info, stats, loading, onRefresh }: SystemPanelProps) {
   const [rebuildingGraph, setRebuildingGraph] = useState(false);
   const [graphActionMsg, setGraphActionMsg] = useState('');
+  const graphTypeLabels = info?.graph?.in_memory?.by_type_labels ?? {};
 
   const handleRebuildGraph = async () => {
     setRebuildingGraph(true);
@@ -59,7 +60,7 @@ export function SystemPanel({ info, stats, loading, onRefresh }: SystemPanelProp
           <div className="chip-row">
             {Object.entries(info.graph.in_memory.by_type).map(([type, value]) => (
               <div key={type} className="chip">
-                <span>{type}</span>
+                <span>{graphTypeLabels[type] ?? type}</span>
                 <strong>{value}</strong>
               </div>
             ))}

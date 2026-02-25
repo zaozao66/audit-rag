@@ -33,6 +33,7 @@ class GraphStore:
         weight: float = 1.0,
         bidirectional: bool = False,
         reverse_relation: Optional[str] = None,
+        attrs: Optional[Dict[str, Any]] = None,
     ):
         if source not in self.nodes or target not in self.nodes:
             return
@@ -42,6 +43,7 @@ class GraphStore:
                 "target": target,
                 "relation": relation,
                 "weight": float(weight),
+                "attrs": attrs or {},
             }
         )
 
@@ -51,6 +53,7 @@ class GraphStore:
                     "target": source,
                     "relation": reverse_relation or relation,
                     "weight": float(weight),
+                    "attrs": attrs or {},
                 }
             )
 

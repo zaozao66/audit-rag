@@ -4,11 +4,19 @@ import os
 import re
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+import src.indexing.graph.ontology as ontology
 from src.indexing.graph.graph_builder import GraphBuilder
 from src.indexing.graph.graph_retriever import GraphRetriever
 from src.indexing.graph.graph_store import GraphStore
+from src.indexing.graph.labels import (
+    doc_type_label,
+    entity_type_key,
+    entity_type_label,
+    relation_key,
+    relation_label,
+)
 from src.indexing.metadata.document_metadata_store import DocumentMetadataStore, DocumentRecord
 from src.indexing.vector.embedding_providers import EmbeddingProvider
 from src.indexing.vector.vector_store import VectorStore
@@ -25,6 +33,11 @@ from src.retrieval.searchers.vector_retriever import VectorRetriever
 logger = logging.getLogger(__name__)
 
 PAGE_PATTERN = re.compile(r"\[\[?PAGE:(\d+)\]?\]")
+RECTIFICATION_STATUS_LABELS = {
+    "completed": "已整改",
+    "in_progress": "整改中",
+    "pending": "待整改",
+}
 
 
 class RAGProcessor:
@@ -533,15 +546,337 @@ class RAGProcessor:
             "hybrid_alpha": params["hybrid_alpha"],
         }
 
-    def build_contexts_and_citations(self, search_results: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    def _try_load_graph_store_only(self) -> bool:
+        if self.graph_store.nodes:
+            return True
+
+        graph_path = self._graph_store_path()
+        if not os.path.exists(graph_path):
+            return False
+
+        try:
+            self.graph_store.load(graph_path)
+            return bool(self.graph_store.nodes)
+        except Exception as e:
+            logger.warning("加载图索引用于引用证据失败: %s", e)
+            return False
+
+    def _build_incoming_edge_index(self) -> Dict[str, List[Tuple[str, Dict[str, Any]]]]:
+        incoming_index: Dict[str, List[Tuple[str, Dict[str, Any]]]] = defaultdict(list)
+        for source, neighbors in self.graph_store.edges.items():
+            source_id = str(source)
+            for edge in neighbors:
+                target = str(edge.get("target", ""))
+                if not target:
+                    continue
+                incoming_index[target].append((source_id, edge))
+        return incoming_index
+
+    def _decorate_node_by_id(self, node_id: str) -> Dict[str, Any]:
+        node = self.graph_store.get_node(node_id)
+        if node:
+            return self._decorate_node(node)
+        return {
+            "id": node_id,
+            "type": "",
+            "name": node_id,
+            "type_label": "",
+            "name_label": node_id,
+            "attrs": {},
+        }
+
+    def _build_path_edge_payload(
+        self,
+        source_id: str,
+        target_id: str,
+        edge: Dict[str, Any],
+        direction: str,
+    ) -> Dict[str, Any]:
+        source_node = self.graph_store.get_node(source_id) or {}
+        source_name = str(source_node.get("name", source_id))
+        source_type = str(source_node.get("type", ""))
+
+        target_node = self.graph_store.get_node(target_id) or {}
+        target_name = str(target_node.get("name", target_id))
+        target_type = str(target_node.get("type", ""))
+
+        relation = str(edge.get("relation", ""))
+
+        return {
+            "source": source_id,
+            "source_name": source_name,
+            "source_name_label": self._label_node_name(source_type, source_name),
+            "source_type": source_type,
+            "source_type_label": entity_type_label(source_type),
+            "target": target_id,
+            "target_name": target_name,
+            "target_name_label": self._label_node_name(target_type, target_name),
+            "target_type": target_type,
+            "target_type_label": entity_type_label(target_type),
+            "relation": relation,
+            "relation_label": relation_label(relation),
+            "weight": float(edge.get("weight", 1.0)),
+            "attrs": edge.get("attrs", {}),
+            "direction": direction,
+        }
+
+    def _build_path_text(self, path_nodes: List[Dict[str, Any]], path_edges: List[Dict[str, Any]]) -> str:
+        if not path_nodes:
+            return ""
+
+        first = path_nodes[0]
+        first_name = str(first.get("name_label") or first.get("name") or first.get("id") or "")
+        parts = [first_name]
+
+        for idx, edge in enumerate(path_edges):
+            if idx + 1 >= len(path_nodes):
+                break
+            relation_name = str(edge.get("relation_label") or edge.get("relation") or "关联")
+            if edge.get("direction") == "reverse":
+                relation_name = f"{relation_name}(逆向)"
+            target = path_nodes[idx + 1]
+            target_name = str(target.get("name_label") or target.get("name") or target.get("id") or "")
+            parts.append(f" -[{relation_name}]- {target_name}")
+
+        return "".join(parts)
+
+    def _find_shortest_path(
+        self,
+        source_id: str,
+        target_id: str,
+        max_hops: int,
+        incoming_index: Dict[str, List[Tuple[str, Dict[str, Any]]]],
+    ) -> Optional[Dict[str, Any]]:
+        if source_id not in self.graph_store.nodes or target_id not in self.graph_store.nodes:
+            return None
+
+        if source_id == target_id:
+            node_payload = self._decorate_node_by_id(source_id)
+            return {
+                "node_ids": [source_id],
+                "nodes": [node_payload],
+                "edges": [],
+                "path_text": str(node_payload.get("name_label") or node_payload.get("name") or source_id),
+                "hops": 0,
+            }
+
+        q = deque([source_id])
+        depth: Dict[str, int] = {source_id: 0}
+        parent: Dict[str, Tuple[str, Dict[str, Any], str]] = {}
+
+        while q:
+            current = q.popleft()
+            current_depth = depth.get(current, 0)
+            if current_depth >= max_hops:
+                continue
+
+            for edge in self.graph_store.neighbors(current):
+                nxt = str(edge.get("target", ""))
+                if not nxt or nxt not in self.graph_store.nodes:
+                    continue
+                if nxt in depth:
+                    continue
+
+                depth[nxt] = current_depth + 1
+                parent[nxt] = (current, edge, "forward")
+                if nxt == target_id:
+                    q.clear()
+                    break
+                q.append(nxt)
+
+            if target_id in parent:
+                break
+
+            for prev_id, edge in incoming_index.get(current, []):
+                if not prev_id or prev_id not in self.graph_store.nodes:
+                    continue
+                if prev_id in depth:
+                    continue
+
+                depth[prev_id] = current_depth + 1
+                parent[prev_id] = (current, edge, "reverse")
+                if prev_id == target_id:
+                    q.clear()
+                    break
+                q.append(prev_id)
+
+            if target_id in parent:
+                break
+
+        if target_id not in parent:
+            return None
+
+        node_ids = [target_id]
+        step_records: List[Tuple[str, str, Dict[str, Any], str]] = []
+        cursor = target_id
+
+        while cursor != source_id:
+            parent_node, edge, direction = parent[cursor]
+            step_records.append((parent_node, cursor, edge, direction))
+            node_ids.append(parent_node)
+            cursor = parent_node
+
+        node_ids.reverse()
+        step_records.reverse()
+
+        path_nodes = [self._decorate_node_by_id(node_id) for node_id in node_ids]
+        path_edges = [
+            self._build_path_edge_payload(step_source, step_target, edge, direction)
+            for step_source, step_target, edge, direction in step_records
+        ]
+        path_text = self._build_path_text(path_nodes, path_edges)
+
+        return {
+            "node_ids": node_ids,
+            "nodes": path_nodes,
+            "edges": path_edges,
+            "path_text": path_text,
+            "hops": len(path_edges),
+        }
+
+    def _resolve_graph_node(
+        self,
+        node_id: str = "",
+        query: str = "",
+        max_candidates: int = 5,
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        normalized_node_id = str(node_id or "").strip()
+        if normalized_node_id and normalized_node_id in self.graph_store.nodes:
+            selected = self.graph_store.nodes[normalized_node_id]
+            return normalized_node_id, [{**self._decorate_node(selected), "score": 1.0}]
+
+        query_text = str(query or "").strip()
+        if not query_text:
+            return "", []
+
+        candidates: List[Dict[str, Any]] = []
+        matches = self.graph_store.find_nodes_by_query(query_text, max_nodes=max_candidates)
+        for match in matches:
+            match_id = str(match.get("node_id", ""))
+            if not match_id:
+                continue
+            node = self.graph_store.get_node(match_id)
+            if not node:
+                continue
+            candidates.append({**self._decorate_node(node), "score": float(match.get("score", 0.0))})
+
+        selected_id = str(candidates[0].get("id", "")) if candidates else ""
+        return selected_id, candidates
+
+    def _resolve_query_seed_matches(self, query: str, max_nodes: int = 8) -> List[Dict[str, Any]]:
+        query_text = str(query or "").strip()
+        if not query_text:
+            return []
+
+        matched = []
+        for item in self.graph_store.find_nodes_by_query(query_text, max_nodes=max_nodes):
+            node_id = str(item.get("node_id", ""))
+            if not node_id:
+                continue
+            node = self.graph_store.get_node(node_id)
+            if not node:
+                continue
+            matched.append(
+                {
+                    "node_id": node_id,
+                    "score": float(item.get("score", 0.0)),
+                    "node": node,
+                }
+            )
+        return matched
+
+    def _build_graph_evidence_for_chunk(
+        self,
+        chunk_id: str,
+        seed_matches: List[Dict[str, Any]],
+        incoming_index: Dict[str, List[Tuple[str, Dict[str, Any]]]],
+        max_hops: int = 4,
+    ) -> Optional[Dict[str, Any]]:
+        if not chunk_id or not seed_matches:
+            return None
+
+        chunk_node_id = f"{ontology.ENTITY_CHUNK}:{chunk_id}"
+        if chunk_node_id not in self.graph_store.nodes:
+            return None
+
+        best_path: Optional[Dict[str, Any]] = None
+        best_seed: Optional[Dict[str, Any]] = None
+
+        for seed in seed_matches:
+            seed_id = str(seed.get("node_id", ""))
+            if not seed_id:
+                continue
+            path = self._find_shortest_path(seed_id, chunk_node_id, max_hops=max_hops, incoming_index=incoming_index)
+            if not path:
+                continue
+
+            if best_path is None:
+                best_path = path
+                best_seed = seed
+                continue
+
+            prev_hops = int(best_path.get("hops", 10_000))
+            curr_hops = int(path.get("hops", 10_000))
+            prev_seed_score = float(best_seed.get("score", 0.0)) if best_seed else 0.0
+            curr_seed_score = float(seed.get("score", 0.0))
+
+            if curr_hops < prev_hops or (curr_hops == prev_hops and curr_seed_score > prev_seed_score):
+                best_path = path
+                best_seed = seed
+
+        if not best_path or not best_seed:
+            return None
+
+        seed_node = best_seed.get("node") or {}
+        seed_type = str(seed_node.get("type", ""))
+        seed_name = str(seed_node.get("name", ""))
+
+        return {
+            "seed_node_id": str(best_seed.get("node_id", "")),
+            "seed_name": seed_name,
+            "seed_name_label": self._label_node_name(seed_type, seed_name),
+            "seed_type": seed_type,
+            "seed_type_label": entity_type_label(seed_type),
+            "seed_score": float(best_seed.get("score", 0.0)),
+            "hops": int(best_path.get("hops", 0)),
+            "path_text": str(best_path.get("path_text", "")),
+            "path_nodes": best_path.get("nodes", []),
+            "path_edges": best_path.get("edges", []),
+        }
+
+    def build_contexts_and_citations(
+        self,
+        search_results: List[Dict[str, Any]],
+        query: str = "",
+    ) -> Dict[str, List[Dict[str, Any]]]:
         contexts: List[Dict[str, Any]] = []
         citations: List[Dict[str, Any]] = []
+        evidence_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        seed_matches: List[Dict[str, Any]] = []
+        incoming_index: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+        if query and self._try_load_graph_store_only():
+            seed_matches = self._resolve_query_seed_matches(query, max_nodes=10)
+            if seed_matches:
+                incoming_index = self._build_incoming_edge_index()
 
         for idx, res in enumerate(search_results, 1):
             doc = res.get("document", {})
             source_id = f"S{idx}"
             raw_text = doc.get("text", "") or ""
             text_preview = raw_text[:220] + ("..." if len(raw_text) > 220 else "")
+            chunk_id = str(doc.get("chunk_id", "") or "")
+
+            graph_evidence = None
+            if seed_matches and incoming_index and chunk_id:
+                if chunk_id not in evidence_cache:
+                    evidence_cache[chunk_id] = self._build_graph_evidence_for_chunk(
+                        chunk_id=chunk_id,
+                        seed_matches=seed_matches,
+                        incoming_index=incoming_index,
+                        max_hops=4,
+                    )
+                graph_evidence = evidence_cache.get(chunk_id)
 
             contexts.append(
                 {
@@ -561,24 +896,25 @@ class RAGProcessor:
                 }
             )
 
-            citations.append(
-                {
-                    "source_id": source_id,
-                    "doc_id": doc.get("doc_id", ""),
-                    "chunk_id": doc.get("chunk_id", ""),
-                    "filename": doc.get("filename", ""),
-                    "title": doc.get("title", ""),
-                    "doc_type": doc.get("doc_type", ""),
-                    "score": res.get("score", 0.0),
-                    "original_score": res.get("original_score"),
-                    "vector_score": res.get("vector_score"),
-                    "graph_score": res.get("graph_score"),
-                    "text_preview": text_preview,
-                    "page_nos": doc.get("page_nos", []),
-                    "header": doc.get("header", ""),
-                    "section_path": doc.get("section_path", []),
-                }
-            )
+            citation_item = {
+                "source_id": source_id,
+                "doc_id": doc.get("doc_id", ""),
+                "chunk_id": chunk_id,
+                "filename": doc.get("filename", ""),
+                "title": doc.get("title", ""),
+                "doc_type": doc.get("doc_type", ""),
+                "score": res.get("score", 0.0),
+                "original_score": res.get("original_score"),
+                "vector_score": res.get("vector_score"),
+                "graph_score": res.get("graph_score"),
+                "text_preview": text_preview,
+                "page_nos": doc.get("page_nos", []),
+                "header": doc.get("header", ""),
+                "section_path": doc.get("section_path", []),
+            }
+            if graph_evidence:
+                citation_item["graph_evidence"] = graph_evidence
+            citations.append(citation_item)
 
         return {"contexts": contexts, "citations": citations}
 
@@ -628,6 +964,8 @@ class RAGProcessor:
                 logger.warning("加载图索引统计失败，将返回当前内存统计: %s", e)
 
         in_memory_stats = self.graph_store.get_stats()
+        by_type = in_memory_stats.get("by_type", {})
+        in_memory_stats["by_type_labels"] = {k: entity_type_label(k) for k in by_type.keys()}
 
         return {
             "graph_file_exists": os.path.exists(graph_path),
@@ -647,6 +985,248 @@ class RAGProcessor:
         self._ensure_vector_store()
         self.rebuild_graph_index(save=True)
 
+    @staticmethod
+    def _label_node_name(node_type: str, node_name: str) -> str:
+        if node_type == "doc_type":
+            return doc_type_label(node_name)
+        if node_type == "rectification_status":
+            return RECTIFICATION_STATUS_LABELS.get(node_name, node_name)
+        return node_name
+
+    def _decorate_node(self, node: Dict[str, Any]) -> Dict[str, Any]:
+        node_type_key = str(node.get("type", ""))
+        node_name = str(node.get("name", ""))
+        payload = {
+            **node,
+            "type_label": entity_type_label(node_type_key),
+            "name_label": self._label_node_name(node_type_key, node_name),
+        }
+        return payload
+
+    def _build_edge_payload(self, source: str, edge: Dict[str, Any]) -> Dict[str, Any]:
+        source_node = self.graph_store.get_node(source) or {}
+        source_name = str(source_node.get("name", source))
+        source_type = str(source_node.get("type", ""))
+
+        target = str(edge.get("target", ""))
+        target_node = self.graph_store.get_node(target) or {}
+        target_name = str(target_node.get("name", target))
+        target_type = str(target_node.get("type", ""))
+
+        relation = str(edge.get("relation", ""))
+
+        return {
+            "source": source,
+            "source_name": source_name,
+            "source_name_label": self._label_node_name(source_type, source_name),
+            "source_type": source_type,
+            "source_type_label": entity_type_label(source_type),
+            "target": target,
+            "target_name": target_name,
+            "target_name_label": self._label_node_name(target_type, target_name),
+            "target_type": target_type,
+            "target_type_label": entity_type_label(target_type),
+            "relation": relation,
+            "relation_label": relation_label(relation),
+            "weight": float(edge.get("weight", 1.0)),
+            "attrs": edge.get("attrs", {}),
+        }
+
+    def get_graph_overview(self, top_n: int = 8) -> Dict[str, Any]:
+        self._ensure_graph_store_loaded()
+        safe_top_n = max(3, min(50, int(top_n)))
+
+        stats = self.graph_store.get_stats()
+        node_type_counts = stats.get("by_type", {})
+
+        node_type_distribution = [
+            {
+                "type": t,
+                "label": entity_type_label(t),
+                "count": int(c),
+            }
+            for t, c in sorted(node_type_counts.items(), key=lambda item: item[1], reverse=True)
+        ]
+
+        relation_counts: Dict[str, int] = defaultdict(int)
+        for neighbors in self.graph_store.edges.values():
+            for edge in neighbors:
+                rel = str(edge.get("relation", ""))
+                if rel:
+                    relation_counts[rel] += 1
+
+        relation_distribution = [
+            {
+                "relation": rel,
+                "label": relation_label(rel),
+                "count": int(count),
+            }
+            for rel, count in sorted(relation_counts.items(), key=lambda item: item[1], reverse=True)[:safe_top_n]
+        ]
+
+        status_counts: Dict[str, int] = defaultdict(int)
+        for node in self.graph_store.nodes.values():
+            if str(node.get("type", "")) != "rectification_status":
+                continue
+            raw_name = str(node.get("name", ""))
+            status_label = self._label_node_name("rectification_status", raw_name)
+            status_counts[status_label] += 1
+
+        rectification_status_distribution = [
+            {
+                "status": status,
+                "label": status,
+                "count": int(count),
+            }
+            for status, count in sorted(status_counts.items(), key=lambda item: item[1], reverse=True)
+        ]
+
+        department_issues: Dict[str, Set[str]] = defaultdict(set)
+        for node_id, node in self.graph_store.nodes.items():
+            if str(node.get("type", "")) != "issue":
+                continue
+            for edge in self.graph_store.neighbors(node_id):
+                if str(edge.get("relation", "")) != "belongs_to_department":
+                    continue
+                target_id = str(edge.get("target", ""))
+                target_node = self.graph_store.get_node(target_id) or {}
+                if str(target_node.get("type", "")) != "department":
+                    continue
+                dept_name = str(target_node.get("name", ""))
+                if dept_name:
+                    department_issues[dept_name].add(node_id)
+
+        department_issue_top = [
+            {
+                "department": dept,
+                "issue_count": len(issue_ids),
+            }
+            for dept, issue_ids in sorted(
+                department_issues.items(), key=lambda item: len(item[1]), reverse=True
+            )[:safe_top_n]
+        ]
+
+        return {
+            "nodes": int(stats.get("nodes", 0)),
+            "edges": int(stats.get("edges", 0)),
+            "node_type_distribution": node_type_distribution,
+            "relation_distribution": relation_distribution,
+            "rectification_status_distribution": rectification_status_distribution,
+            "department_issue_top": department_issue_top,
+        }
+
+    def get_graph_node_detail(self, node_id: str, max_neighbors: int = 120) -> Dict[str, Any]:
+        self._ensure_graph_store_loaded()
+        safe_limit = max(20, min(300, int(max_neighbors)))
+
+        node = self.graph_store.get_node(node_id)
+        if not node:
+            return {}
+
+        outgoing_edges = []
+        for edge in self.graph_store.neighbors(node_id):
+            outgoing_edges.append(self._build_edge_payload(node_id, edge))
+            if len(outgoing_edges) >= safe_limit:
+                break
+
+        incoming_edges = []
+        for source, neighbors in self.graph_store.edges.items():
+            for edge in neighbors:
+                if str(edge.get("target", "")) != node_id:
+                    continue
+                incoming_edges.append(self._build_edge_payload(source, edge))
+                if len(incoming_edges) >= safe_limit:
+                    break
+            if len(incoming_edges) >= safe_limit:
+                break
+
+        outgoing_edges.sort(key=lambda e: (str(e.get("relation", "")), str(e.get("target_name", ""))))
+        incoming_edges.sort(key=lambda e: (str(e.get("relation", "")), str(e.get("source_name", ""))))
+
+        neighbor_ids = {str(e.get("target", "")) for e in outgoing_edges}
+        neighbor_ids.update({str(e.get("source", "")) for e in incoming_edges})
+        neighbor_ids.discard(node_id)
+
+        neighbors = []
+        for neighbor_id in neighbor_ids:
+            neighbor_node = self.graph_store.get_node(neighbor_id)
+            if neighbor_node:
+                neighbors.append(self._decorate_node(neighbor_node))
+        neighbors.sort(key=lambda n: (str(n.get("type", "")), str(n.get("name", ""))))
+
+        source_map: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        for edge in outgoing_edges + incoming_edges:
+            attrs = edge.get("attrs", {}) or {}
+            doc_id = str(attrs.get("doc_id", "") or "")
+            chunk_id = str(attrs.get("source_chunk_id", "") or "")
+            extractor = str(attrs.get("extractor", "") or "")
+            confidence = float(attrs.get("confidence", 0.0) or 0.0)
+
+            if not doc_id and not chunk_id:
+                continue
+
+            source_key = (doc_id, chunk_id, extractor)
+            prev = source_map.get(source_key)
+            if prev is None or confidence > float(prev.get("confidence", 0.0)):
+                source_map[source_key] = {
+                    "doc_id": doc_id,
+                    "chunk_id": chunk_id,
+                    "extractor": extractor,
+                    "confidence": confidence,
+                }
+
+        sources = sorted(
+            source_map.values(),
+            key=lambda item: float(item.get("confidence", 0.0)),
+            reverse=True,
+        )
+
+        source_chunks: List[Dict[str, Any]] = []
+        if sources:
+            if not self.vector_store:
+                try:
+                    self.load_vector_store(self.vector_store_path)
+                except Exception:
+                    pass
+
+            if self.vector_store:
+                docs_by_chunk: Dict[str, Dict[str, Any]] = {}
+                for d in self.vector_store.documents:
+                    chunk_id = str(d.get("chunk_id", "") or "")
+                    if chunk_id and chunk_id not in docs_by_chunk:
+                        docs_by_chunk[chunk_id] = d
+
+                for src in sources:
+                    chunk_id = str(src.get("chunk_id", "") or "")
+                    if not chunk_id:
+                        continue
+                    doc = docs_by_chunk.get(chunk_id)
+                    if not doc:
+                        continue
+                    text = str(doc.get("text", "") or "")
+                    source_chunks.append(
+                        {
+                            "chunk_id": chunk_id,
+                            "doc_id": doc.get("doc_id", ""),
+                            "filename": doc.get("filename", ""),
+                            "title": doc.get("title", ""),
+                            "doc_type": doc.get("doc_type", ""),
+                            "doc_type_label": doc_type_label(str(doc.get("doc_type", ""))),
+                            "page_nos": doc.get("page_nos", []),
+                            "header": doc.get("header", ""),
+                            "text_preview": text[:220] + ("..." if len(text) > 220 else ""),
+                        }
+                    )
+
+        return {
+            "node": self._decorate_node(node),
+            "outgoing_edges": outgoing_edges,
+            "incoming_edges": incoming_edges,
+            "neighbors": neighbors,
+            "sources": sources,
+            "source_chunks": source_chunks,
+        }
+
     def list_graph_nodes(
         self,
         page: int = 1,
@@ -656,8 +1236,16 @@ class RAGProcessor:
     ) -> Dict[str, Any]:
         self._ensure_graph_store_loaded()
 
-        type_filter = (node_type or "").strip()
+        type_filter = entity_type_key((node_type or "").strip())
         keyword_filter = (keyword or "").strip().lower()
+
+        type_options = sorted(
+            {
+                str(node.get("type", "")).strip()
+                for node in self.graph_store.nodes.values()
+                if str(node.get("type", "")).strip()
+            }
+        )
 
         nodes = []
         for node in self.graph_store.nodes.values():
@@ -668,7 +1256,7 @@ class RAGProcessor:
                 attrs_text = str(node.get("attrs", "")).lower()
                 if keyword_filter not in name and keyword_filter not in attrs_text:
                     continue
-            nodes.append(node)
+            nodes.append(self._decorate_node(node))
 
         nodes.sort(key=lambda n: (str(n.get("type", "")), str(n.get("name", ""))))
         total = len(nodes)
@@ -680,6 +1268,7 @@ class RAGProcessor:
             "page": page,
             "page_size": page_size,
             "nodes": nodes[start:end],
+            "type_options": [{"value": key, "label": entity_type_label(key)} for key in type_options],
         }
 
     def list_graph_edges(
@@ -691,42 +1280,39 @@ class RAGProcessor:
     ) -> Dict[str, Any]:
         self._ensure_graph_store_loaded()
 
-        relation_filter = (relation or "").strip()
+        relation_filter = relation_key((relation or "").strip())
         keyword_filter = (keyword or "").strip().lower()
+
+        relation_options = sorted(
+            {
+                str(edge.get("relation", "")).strip()
+                for neighbors in self.graph_store.edges.values()
+                for edge in neighbors
+                if str(edge.get("relation", "")).strip()
+            }
+        )
 
         edges = []
         for source, neighbors in self.graph_store.edges.items():
-            source_node = self.graph_store.get_node(source) or {}
-            source_name = source_node.get("name", source)
-            source_type = source_node.get("type", "")
-
             for edge in neighbors:
                 rel = edge.get("relation", "")
                 if relation_filter and rel != relation_filter:
                     continue
 
-                target = edge.get("target")
-                target_node = self.graph_store.get_node(target) or {}
-                target_name = target_node.get("name", target)
-                target_type = target_node.get("type", "")
+                edge_payload = self._build_edge_payload(source, edge)
 
                 if keyword_filter:
-                    edge_text = f"{source_name} {source_type} {rel} {target_name} {target_type}".lower()
+                    edge_text = (
+                        f"{edge_payload.get('source_name', '')} "
+                        f"{edge_payload.get('source_type', '')} "
+                        f"{edge_payload.get('relation', '')} "
+                        f"{edge_payload.get('target_name', '')} "
+                        f"{edge_payload.get('target_type', '')}"
+                    ).lower()
                     if keyword_filter not in edge_text:
                         continue
 
-                edges.append(
-                    {
-                        "source": source,
-                        "source_name": source_name,
-                        "source_type": source_type,
-                        "target": target,
-                        "target_name": target_name,
-                        "target_type": target_type,
-                        "relation": rel,
-                        "weight": float(edge.get("weight", 1.0)),
-                    }
-                )
+                edges.append(edge_payload)
 
         edges.sort(key=lambda e: (str(e.get("relation", "")), str(e.get("source_name", "")), str(e.get("target_name", ""))))
         total = len(edges)
@@ -738,6 +1324,7 @@ class RAGProcessor:
             "page": page,
             "page_size": page_size,
             "edges": edges[start:end],
+            "relation_options": [{"value": key, "label": relation_label(key)} for key in relation_options],
         }
 
     def get_graph_subgraph(
@@ -790,7 +1377,12 @@ class RAGProcessor:
                 if len(visited) >= safe_max_nodes:
                     break
 
-        nodes = [self.graph_store.nodes[node_id] for node_id in visited if node_id in self.graph_store.nodes]
+        nodes = []
+        for node_id in visited:
+            if node_id not in self.graph_store.nodes:
+                continue
+            node = self.graph_store.nodes[node_id]
+            nodes.append(self._decorate_node(node))
         nodes.sort(key=lambda n: (str(n.get("type", "")), str(n.get("name", ""))))
 
         edge_seen = set()
@@ -805,20 +1397,7 @@ class RAGProcessor:
                 if signature in edge_seen:
                     continue
                 edge_seen.add(signature)
-                source_node = self.graph_store.get_node(source) or {}
-                target_node = self.graph_store.get_node(target) or {}
-                edges.append(
-                    {
-                        "source": source,
-                        "source_name": source_node.get("name", source),
-                        "source_type": source_node.get("type", ""),
-                        "target": target,
-                        "target_name": target_node.get("name", target),
-                        "target_type": target_node.get("type", ""),
-                        "relation": relation,
-                        "weight": float(edge.get("weight", 1.0)),
-                    }
-                )
+                edges.append(self._build_edge_payload(source, edge))
 
         edges.sort(key=lambda e: (str(e.get("relation", "")), str(e.get("source_name", "")), str(e.get("target_name", ""))))
 
@@ -829,6 +1408,68 @@ class RAGProcessor:
             "hops": safe_hops,
             "max_nodes": safe_max_nodes,
         }
+
+    def get_graph_path(
+        self,
+        source_node_id: str = "",
+        target_node_id: str = "",
+        source_query: str = "",
+        target_query: str = "",
+        max_hops: int = 4,
+        max_candidates: int = 5,
+    ) -> Dict[str, Any]:
+        self._ensure_graph_store_loaded()
+
+        safe_hops = max(1, min(8, int(max_hops)))
+        safe_candidates = max(1, min(10, int(max_candidates)))
+
+        resolved_source_id, source_candidates = self._resolve_graph_node(
+            node_id=source_node_id,
+            query=source_query,
+            max_candidates=safe_candidates,
+        )
+        resolved_target_id, target_candidates = self._resolve_graph_node(
+            node_id=target_node_id,
+            query=target_query,
+            max_candidates=safe_candidates,
+        )
+
+        result: Dict[str, Any] = {
+            "source_node": self._decorate_node_by_id(resolved_source_id) if resolved_source_id else None,
+            "target_node": self._decorate_node_by_id(resolved_target_id) if resolved_target_id else None,
+            "source_candidates": source_candidates,
+            "target_candidates": target_candidates,
+            "path_found": False,
+            "path_nodes": [],
+            "path_edges": [],
+            "path_text": "",
+            "hops": 0,
+            "max_hops": safe_hops,
+        }
+
+        if not resolved_source_id or not resolved_target_id:
+            return result
+
+        incoming_index = self._build_incoming_edge_index()
+        path = self._find_shortest_path(
+            source_id=resolved_source_id,
+            target_id=resolved_target_id,
+            max_hops=safe_hops,
+            incoming_index=incoming_index,
+        )
+        if not path:
+            return result
+
+        result.update(
+            {
+                "path_found": True,
+                "path_nodes": path.get("nodes", []),
+                "path_edges": path.get("edges", []),
+                "path_text": path.get("path_text", ""),
+                "hops": int(path.get("hops", 0)),
+            }
+        )
+        return result
 
     def clear_vector_store(self):
         if self.vector_store:

@@ -17,7 +17,10 @@ import type {
   RebuildGraphResponse,
   GraphEdgesResponse,
   GraphNodesResponse,
-  GraphSubgraphResponse
+  GraphSubgraphResponse,
+  GraphOverviewResponse,
+  GraphNodeDetailResponse,
+  GraphPathResponse
 } from '../types/rag';
 
 export function getInfo() {
@@ -247,6 +250,41 @@ export function getGraphSubgraph(payload: {
       node_ids: payload.nodeIds ?? [],
       hops: payload.hops ?? 2,
       max_nodes: payload.maxNodes ?? 120
+    })
+  });
+}
+
+export function getGraphOverview(params?: { topN?: number }) {
+  const query = new URLSearchParams();
+  if (params?.topN !== undefined) query.set('top_n', String(params.topN));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return apiFetch<GraphOverviewResponse>(`/graph/overview${suffix}`);
+}
+
+export function getGraphNodeDetail(nodeId: string, maxNeighbors = 120) {
+  return apiFetch<GraphNodeDetailResponse>(
+    `/graph/node/${encodeURIComponent(nodeId)}?max_neighbors=${String(maxNeighbors)}`
+  );
+}
+
+export function getGraphPath(payload: {
+  sourceNodeId?: string;
+  targetNodeId?: string;
+  sourceQuery?: string;
+  targetQuery?: string;
+  maxHops?: number;
+  maxCandidates?: number;
+}) {
+  return apiFetch<GraphPathResponse>('/graph/path', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source_node_id: payload.sourceNodeId ?? '',
+      target_node_id: payload.targetNodeId ?? '',
+      source_query: payload.sourceQuery ?? '',
+      target_query: payload.targetQuery ?? '',
+      max_hops: payload.maxHops ?? 4,
+      max_candidates: payload.maxCandidates ?? 5
     })
   });
 }

@@ -121,6 +121,7 @@ export interface GraphStats {
   nodes: number;
   edges: number;
   by_type: Record<string, number>;
+  by_type_labels?: Record<string, string>;
 }
 
 export interface GraphInfo {
@@ -140,18 +141,32 @@ export interface GraphNodeItem {
   id: string;
   type: string;
   name: string;
+  type_label?: string;
+  name_label?: string;
   attrs: Record<string, unknown>;
 }
 
 export interface GraphEdgeItem {
   source: string;
   source_name: string;
+  source_name_label?: string;
   source_type: string;
+  source_type_label?: string;
   target: string;
   target_name: string;
+  target_name_label?: string;
   target_type: string;
+  target_type_label?: string;
   relation: string;
+  relation_label?: string;
   weight: number;
+  attrs?: Record<string, unknown>;
+  direction?: 'forward' | 'reverse';
+}
+
+export interface KeyLabelOption {
+  value: string;
+  label: string;
 }
 
 export interface GraphNodesResponse {
@@ -160,6 +175,7 @@ export interface GraphNodesResponse {
   page: number;
   page_size: number;
   nodes: GraphNodeItem[];
+  type_options?: KeyLabelOption[];
 }
 
 export interface GraphEdgesResponse {
@@ -168,6 +184,7 @@ export interface GraphEdgesResponse {
   page: number;
   page_size: number;
   edges: GraphEdgeItem[];
+  relation_options?: KeyLabelOption[];
 }
 
 export interface GraphSubgraphResponse {
@@ -177,6 +194,83 @@ export interface GraphSubgraphResponse {
   edges: GraphEdgeItem[];
   hops: number;
   max_nodes: number;
+}
+
+export interface GraphOverviewItem {
+  count: number;
+}
+
+export interface GraphNodeTypeOverviewItem extends GraphOverviewItem {
+  type: string;
+  label: string;
+}
+
+export interface GraphRelationOverviewItem extends GraphOverviewItem {
+  relation: string;
+  label: string;
+}
+
+export interface GraphStatusOverviewItem extends GraphOverviewItem {
+  status: string;
+  label: string;
+}
+
+export interface GraphDepartmentIssueItem {
+  department: string;
+  issue_count: number;
+}
+
+export interface GraphOverviewResponse {
+  success: boolean;
+  nodes: number;
+  edges: number;
+  node_type_distribution: GraphNodeTypeOverviewItem[];
+  relation_distribution: GraphRelationOverviewItem[];
+  rectification_status_distribution: GraphStatusOverviewItem[];
+  department_issue_top: GraphDepartmentIssueItem[];
+}
+
+export interface GraphNodeSourceItem {
+  doc_id: string;
+  chunk_id: string;
+  extractor: string;
+  confidence: number;
+}
+
+export interface GraphSourceChunkItem {
+  chunk_id: string;
+  doc_id: string;
+  filename: string;
+  title: string;
+  doc_type: string;
+  doc_type_label?: string;
+  page_nos: number[];
+  header: string;
+  text_preview: string;
+}
+
+export interface GraphNodeDetailResponse {
+  success: boolean;
+  node: GraphNodeItem;
+  outgoing_edges: GraphEdgeItem[];
+  incoming_edges: GraphEdgeItem[];
+  neighbors: GraphNodeItem[];
+  sources: GraphNodeSourceItem[];
+  source_chunks: GraphSourceChunkItem[];
+}
+
+export interface GraphPathResponse {
+  success: boolean;
+  source_node: GraphNodeItem | null;
+  target_node: GraphNodeItem | null;
+  source_candidates: Array<GraphNodeItem & { score?: number }>;
+  target_candidates: Array<GraphNodeItem & { score?: number }>;
+  path_found: boolean;
+  path_nodes: GraphNodeItem[];
+  path_edges: GraphEdgeItem[];
+  path_text: string;
+  hops: number;
+  max_hops: number;
 }
 
 export interface DocumentRecord {
