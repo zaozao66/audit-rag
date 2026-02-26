@@ -11,6 +11,7 @@ import type {
   CitationItem,
   StreamCitationsEvent,
   StreamProgressEvent,
+  StreamSessionEvent,
   StatsResponse,
   UploadResponse,
   RetrievalOptions,
@@ -67,11 +68,13 @@ export function askWithLlm(query: string, topK: number, options?: Partial<Retrie
 }
 
 export async function streamAskWithLlm(
-  query: string,
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
   options: Partial<RetrievalOptions> | undefined,
+  sessionId: string | undefined,
   onDelta: (chunk: string) => void,
   onProgress?: (event: StreamProgressEvent) => void,
   onCitations?: (citations: CitationItem[]) => void,
+  onSession?: (session: StreamSessionEvent) => void,
   signal?: AbortSignal
 ) {
   const payload = buildRetrievalPayload(options);
@@ -79,8 +82,9 @@ export async function streamAskWithLlm(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      messages: [{ role: 'user', content: query }],
+      messages,
       stream: true,
+      session_id: sessionId,
       ...payload
     }),
     signal
@@ -150,6 +154,10 @@ export async function streamAskWithLlm(
 
       if (payload?.event === 'citations') {
         onCitations?.((payload as StreamCitationsEvent).citations || []);
+      }
+
+      if (payload?.event === 'session') {
+        onSession?.(payload as StreamSessionEvent);
       }
 
       const delta = payload?.choices?.[0]?.delta?.content;

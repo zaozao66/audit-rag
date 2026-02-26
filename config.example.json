@@ -34,6 +34,10 @@
       "top_k": 5,
       "similarity_threshold": 0.5
     },
+    "conversation": {
+      "max_messages": 24,
+      "ttl_minutes": 120
+    },
     "vector_store_path": "./data/vector_store_text_embedding"
   },
   "production": {
@@ -70,6 +74,10 @@
     "search": {
       "top_k": 5,
       "similarity_threshold": 0.5
+    },
+    "conversation": {
+      "max_messages": 24,
+      "ttl_minutes": 120
     },
     "vector_store_path": "./data/vector_store_text_embedding"
   },

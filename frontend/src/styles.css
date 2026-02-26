@@ -140,7 +140,8 @@ h3 {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -188,11 +189,16 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.8);
+}
+
+textarea {
+  resize: vertical;
 }
 
 .form-grid {
@@ -403,6 +409,159 @@ select {
   margin-top: 12px;
   display: grid;
   gap: 8px;
+}
+
+.chat-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-header {
+  padding: 16px 16px 0;
+}
+
+.chat-session-meta {
+  padding: 0 16px 10px;
+}
+
+.chat-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.chat-body.has-citation {
+  grid-template-columns: 1fr 320px;
+}
+
+.chat-thread {
+  padding: 8px 16px 16px;
+  height: min(62vh, 760px);
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.44) 100%);
+}
+
+.chat-bubble {
+  max-width: min(920px, 100%);
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.86);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-bubble.user {
+  margin-left: auto;
+  width: min(74%, 760px);
+  background: rgba(12, 124, 89, 0.12);
+  border-color: rgba(12, 124, 89, 0.26);
+}
+
+.chat-bubble.assistant {
+  margin-right: auto;
+  width: min(82%, 880px);
+}
+
+.chat-role {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.chat-content p:first-child {
+  margin-top: 0;
+}
+
+.chat-progress {
+  font-size: 12px;
+}
+
+.chat-citations {
+  border-top: 1px solid rgba(84, 62, 43, 0.16);
+  padding-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-citation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-citation-tags .chip {
+  cursor: pointer;
+}
+
+.chat-citation-tags .chip.active {
+  border-color: rgba(12, 124, 89, 0.5);
+  background: rgba(12, 124, 89, 0.12);
+}
+
+.chat-citation-panel {
+  display: none;
+  border-left: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.68);
+  padding: 12px;
+}
+
+.chat-citation-panel.open {
+  display: block;
+}
+
+.chat-citation-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-citation-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-citation-empty {
+  border: 1px dashed var(--panel-border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.chat-input-area {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.62);
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .chat-body.has-citation {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-citation-panel {
+    border-left: 0;
+    border-top: 1px solid var(--panel-border);
+  }
+
+  .chat-thread {
+    height: min(66vh, 720px);
+    padding: 8px 10px 12px;
+  }
+
+  .chat-bubble.user,
+  .chat-bubble.assistant {
+    width: 100%;
+  }
 }
 
 .citation-list {

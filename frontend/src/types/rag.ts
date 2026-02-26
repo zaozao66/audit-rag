@@ -78,11 +78,20 @@ export interface StreamProgressEvent {
   use_rerank?: boolean;
   hits?: number;
   model?: string;
+  session_id?: string;
+  standalone_query?: string;
+  route_reason?: string;
 }
 
 export interface StreamCitationsEvent {
   event: 'citations';
   citations: CitationItem[];
+}
+
+export interface StreamSessionEvent {
+  event: 'session';
+  session_id: string;
+  summary?: string;
 }
 
 export interface DocumentStats {

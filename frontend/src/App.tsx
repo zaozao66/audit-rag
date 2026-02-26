@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getDocumentStats, getInfo, listDocuments } from './api/rag';
 import { DocumentsPanel } from './components/DocumentsPanel';
-import { GraphPanel } from './components/GraphPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { SystemPanel } from './components/SystemPanel';
 import { UploadPanel } from './components/UploadPanel';
 import type { DocumentRecord, DocumentStats, InfoResponse } from './types/rag';
 
-type MainTab = 'system' | 'documents' | 'search' | 'graph';
+type MainTab = 'system' | 'documents' | 'search';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<MainTab>('system');
@@ -74,9 +73,6 @@ export default function App() {
         <button className={activeTab === 'search' ? 'active' : ''} onClick={() => setActiveTab('search')}>
           检索回答
         </button>
-        <button className={activeTab === 'graph' ? 'active' : ''} onClick={() => setActiveTab('graph')}>
-          图谱浏览
-        </button>
       </nav>
 
       <section className={`tab-content ${activeTab === 'system' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'system'}>
@@ -104,14 +100,6 @@ export default function App() {
 
       <section className={`tab-content ${activeTab === 'search' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'search'}>
         <SearchPanel />
-      </section>
-
-      <section className={`tab-content ${activeTab === 'graph' ? '' : 'tab-hidden'}`} aria-hidden={activeTab !== 'graph'}>
-        <GraphPanel
-          graphTypes={Object.keys(info?.graph?.in_memory?.by_type ?? {})}
-          graphTypeLabels={info?.graph?.in_memory?.by_type_labels ?? {}}
-          onGraphChanged={loadMeta}
-        />
       </section>
     </main>
   );

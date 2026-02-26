@@ -5,6 +5,7 @@ LLM提供者 - 用于生成式回答
 
 import logging
 import json
+import re
 import httpx
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
@@ -70,7 +71,10 @@ class LLMProvider:
         self,
         query: str,
         contexts: List[Dict[str, Any]],
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        conversation_messages: Optional[List[Dict[str, str]]] = None,
+        conversation_summary: str = "",
+        standalone_query: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         基于检索结果生成回答
@@ -88,7 +92,14 @@ class LLMProvider:
             if system_prompt is None:
                 system_prompt = self._get_default_system_prompt()
             
-            user_prompt = self._build_user_prompt(query, context_text)
+            conversation_text = self._build_conversation_text(conversation_messages or [])
+            user_prompt = self._build_user_prompt(
+                query=query,
+                context_text=context_text,
+                conversation_text=conversation_text,
+                conversation_summary=conversation_summary,
+                standalone_query=standalone_query,
+            )
             
             # 构建请求消息
             messages = [
@@ -176,7 +187,10 @@ class LLMProvider:
         self,
         query: str,
         contexts: List[Dict[str, Any]],
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        conversation_messages: Optional[List[Dict[str, str]]] = None,
+        conversation_summary: str = "",
+        standalone_query: Optional[str] = None,
     ):
         """
         基于检索结果流式生成回答
@@ -190,7 +204,14 @@ class LLMProvider:
             context_text = self._build_context_text(contexts)
             if system_prompt is None:
                 system_prompt = self._get_default_system_prompt()
-            user_prompt = self._build_user_prompt(query, context_text)
+            conversation_text = self._build_conversation_text(conversation_messages or [])
+            user_prompt = self._build_user_prompt(
+                query=query,
+                context_text=context_text,
+                conversation_text=conversation_text,
+                conversation_summary=conversation_summary,
+                standalone_query=standalone_query,
+            )
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -361,6 +382,186 @@ class LLMProvider:
                 "graph_top_k": 12,
                 "hybrid_alpha": 0.65
             }
+
+    def rewrite_query(
+        self,
+        query: str,
+        recent_messages: Optional[List[Dict[str, str]]] = None,
+        conversation_summary: str = "",
+    ) -> str:
+        """Rewrite follow-up questions into standalone queries."""
+        question = (query or "").strip()
+        if not question:
+            return ""
+
+        recent_messages = recent_messages or []
+        if not recent_messages and not conversation_summary:
+            return question
+
+        prompt = f"""请把用户当前问题改写为“可独立检索”的单句问题。
+要求：
+1) 保留原问题意图，不扩展新事实
+2) 补全代词指代（如“这个/它/上面提到的”）
+3) 输出仅一行改写后的问题，不要解释
+
+历史摘要:
+{conversation_summary or '(无)'}
+
+最近对话:
+{self._build_conversation_text(recent_messages)}
+
+当前问题:
+{question}
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "你是检索查询改写助手，只输出改写后的问题。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=256,
+                timeout=self.request_timeout,
+            )
+            rewritten = (response.choices[0].message.content or "").strip()
+            rewritten = rewritten.strip("` \n\t\"'")
+            return rewritten or question
+        except Exception as e:
+            logger.warning("Query改写失败，降级使用原问题: %s", e)
+            return question
+
+    def route_retrieval(
+        self,
+        query: str,
+        recent_messages: Optional[List[Dict[str, str]]] = None,
+        has_last_contexts: bool = False,
+    ) -> Dict[str, str]:
+        """
+        Decide whether to skip retrieval, reuse previous docs, or run full retrieval.
+        Returns: {"decision": "...", "reason": "..."}
+        """
+        question = (query or "").strip()
+        if not question:
+            return {"decision": "no_retrieval", "reason": "空查询"}
+
+        heuristic = self._heuristic_route(question, has_last_contexts=has_last_contexts)
+        if heuristic["decision"] != "full_retrieval":
+            return heuristic
+
+        recent_text = self._build_conversation_text(recent_messages or [])
+        prompt = f"""请根据当前问题判断检索策略，必须返回JSON：
+{{
+  "decision": "no_retrieval | reuse_docs | full_retrieval",
+  "reason": "简短理由"
+}}
+
+规则：
+- no_retrieval: 寒暄、确认、纯改写/润色，不需要知识库事实
+- reuse_docs: 对上轮结果追问/展开，优先复用上轮文档
+- full_retrieval: 新主题、事实性问答、需要新证据
+
+当前问题: {question}
+最近对话: {recent_text or '(无)'}
+可复用上轮文档: {has_last_contexts}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "你是检索路由助手，只输出JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=180,
+                timeout=self.request_timeout,
+            )
+            payload = self._extract_json_block((response.choices[0].message.content or "").strip())
+            data = json.loads(payload)
+            decision = str(data.get("decision", "full_retrieval")).strip().lower()
+            if decision not in {"no_retrieval", "reuse_docs", "full_retrieval"}:
+                decision = "full_retrieval"
+            if decision == "reuse_docs" and not has_last_contexts:
+                decision = "full_retrieval"
+            reason = str(data.get("reason", "")).strip() or "LLM路由结果"
+            return {"decision": decision, "reason": reason}
+        except Exception as e:
+            logger.warning("检索路由失败，降级到规则路由: %s", e)
+            return heuristic
+
+    def summarize_messages(
+        self,
+        recent_messages: Optional[List[Dict[str, str]]] = None,
+        previous_summary: str = "",
+    ) -> str:
+        """Summarize conversation memory to control context length."""
+        recent_messages = recent_messages or []
+        if not recent_messages:
+            return previous_summary.strip()
+
+        prompt = f"""请把下面的会话总结成简洁记忆，供后续问答使用。
+输出要求：
+- 3~6条要点
+- 保留关键实体、时间、约束条件、用户目标
+- 不要编造
+
+已有摘要:
+{previous_summary or '(无)'}
+
+最近对话:
+{self._build_conversation_text(recent_messages)}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "你是对话摘要助手。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=320,
+                timeout=self.request_timeout,
+            )
+            summary = (response.choices[0].message.content or "").strip()
+            return summary or previous_summary.strip()
+        except Exception as e:
+            logger.warning("会话摘要失败，使用简化摘要: %s", e)
+            lines = [previous_summary.strip()] if previous_summary.strip() else []
+            for msg in recent_messages[-6:]:
+                role = "用户" if msg.get("role") == "user" else "助手"
+                lines.append(f"- {role}: {msg.get('content', '')[:120]}")
+            return "\n".join(line for line in lines if line).strip()
+
+    def _heuristic_route(self, query: str, has_last_contexts: bool) -> Dict[str, str]:
+        light_chat = {"谢谢", "好的", "明白了", "了解", "收到", "ok", "OK"}
+        if query in light_chat:
+            return {"decision": "no_retrieval", "reason": "寒暄或确认语句"}
+
+        no_retrieval_keywords = ("改写", "润色", "翻译", "总结一下这句话", "帮我优化表达")
+        if any(k in query for k in no_retrieval_keywords):
+            return {"decision": "no_retrieval", "reason": "语言处理请求"}
+
+        follow_up_markers = ("这个", "这个问题", "上面", "刚才", "前面", "继续", "展开", "再细化", "它", "这些")
+        if has_last_contexts and any(m in query for m in follow_up_markers):
+            return {"decision": "reuse_docs", "reason": "疑似追问上轮内容"}
+
+        return {"decision": "full_retrieval", "reason": "默认走完整检索"}
+
+    def _extract_json_block(self, text: str) -> str:
+        if not text:
+            return "{}"
+        cleaned = text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0].strip()
+            return cleaned
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```", 1)[1].split("```", 1)[0].strip()
+            return cleaned
+        match = re.search(r"\\{[\\s\\S]*\\}", cleaned)
+        if match:
+            return match.group(0)
+        return cleaned
     
     def _build_context_text(self, contexts: List[Dict[str, Any]]) -> str:
         """
@@ -413,8 +614,28 @@ class LLMProvider:
 3. 来源标记必须来自参考资料中的来源ID，不能凭空创建
 4. 如果资料不足，请明确说明“未在参考资料中找到充分依据”
 5. 回答结构清晰、专业、可执行"""
+
+    def _build_conversation_text(self, messages: List[Dict[str, str]], max_items: int = 8) -> str:
+        rows: List[str] = []
+        for msg in (messages or [])[-max_items:]:
+            role = msg.get("role", "")
+            if role not in {"user", "assistant", "system"}:
+                continue
+            role_label = "用户" if role == "user" else ("助手" if role == "assistant" else "系统")
+            content = str(msg.get("content", "")).strip()
+            if not content:
+                continue
+            rows.append(f"{role_label}: {content}")
+        return "\n".join(rows)
     
-    def _build_user_prompt(self, query: str, context_text: str) -> str:
+    def _build_user_prompt(
+        self,
+        query: str,
+        context_text: str,
+        conversation_text: str = "",
+        conversation_summary: str = "",
+        standalone_query: Optional[str] = None,
+    ) -> str:
         """
         构建用户提示词
         
@@ -422,17 +643,25 @@ class LLMProvider:
         :param context_text: 上下文文本
         :return: 用户提示词
         """
+        rewrite_line = f"\n检索改写问题: {standalone_query}" if standalone_query else ""
+        summary_block = f"\n历史摘要:\n{conversation_summary}\n" if conversation_summary else "\n历史摘要:\n(无)\n"
+        convo_block = f"\n最近对话:\n{conversation_text}\n" if conversation_text else "\n最近对话:\n(无)\n"
+
         return f"""请基于以下参考资料回答问题。
 
 {context_text}
+{summary_block}
+{convo_block}
 
 问题: {query}
+{rewrite_line}
 
 输出要求：
 - 在结论句后追加来源标记，如：XXX。[S1]
 - 可以同时引用多个来源，如：[S1][S3]
 - 不要输出不存在的来源编号
-- 不要省略来源标记"""
+- 不要省略来源标记
+- 如果参考资料为空，只能基于对话历史回答且明确说明“本回答未使用知识库证据”"""
 
 
 def create_llm_provider(config: Dict[str, Any]) -> LLMProvider:

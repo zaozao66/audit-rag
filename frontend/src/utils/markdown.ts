@@ -37,6 +37,7 @@ function inlineMarkdown(input: string, options?: RenderMarkdownOptions): string 
   text = text.replace(/\[(S\d+)\]/g, (_matched: string, sourceId: string) => {
     return `<a class="cite-ref" href="#${citationPrefix}cite-${sourceId}">[${sourceId}]</a>`;
   });
+  text = text.replace(/\n/g, '<br/>');
 
   return text;
 }
@@ -81,7 +82,7 @@ export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownO
         quoteLines.push(lines[i].replace(/^>\s?/, ''));
         i += 1;
       }
-      html.push(`<blockquote>${inlineMarkdown(quoteLines.join('<br/>'), options)}</blockquote>`);
+      html.push(`<blockquote>${inlineMarkdown(quoteLines.join('\n'), options)}</blockquote>`);
       continue;
     }
 
@@ -90,6 +91,18 @@ export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownO
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
         items.push(lines[i].replace(/^\s*[-*+]\s+/, ''));
         i += 1;
+
+        while (i < lines.length) {
+          const continuation = lines[i];
+          if (!continuation.trim()) {
+            break;
+          }
+          if (/^\s*[-*+]\s+/.test(continuation) || /^\s*\d+\.\s+/.test(continuation) || /^(#{1,6})\s+/.test(continuation) || /^```/.test(continuation) || /^>\s?/.test(continuation)) {
+            break;
+          }
+          items[items.length - 1] += `\n${continuation.trim()}`;
+          i += 1;
+        }
       }
       html.push(`<ul>${items.map((item) => `<li>${inlineMarkdown(item, options)}</li>`).join('')}</ul>`);
       continue;
@@ -97,10 +110,24 @@ export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownO
 
     if (/^\s*\d+\.\s+/.test(line)) {
       const items: string[] = [];
+      const firstMatch = line.match(/^\s*(\d+)\.\s+/);
+      const startNum = firstMatch ? Number(firstMatch[1]) : 1;
       while (i < lines.length) {
         if (/^\s*\d+\.\s+/.test(lines[i])) {
           items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
           i += 1;
+
+          while (i < lines.length) {
+            const continuation = lines[i];
+            if (!continuation.trim()) {
+              break;
+            }
+            if (/^\s*\d+\.\s+/.test(continuation) || /^\s*[-*+]\s+/.test(continuation) || /^(#{1,6})\s+/.test(continuation) || /^```/.test(continuation) || /^>\s?/.test(continuation)) {
+              break;
+            }
+            items[items.length - 1] += `\n${continuation.trim()}`;
+            i += 1;
+          }
           continue;
         }
 
@@ -117,7 +144,8 @@ export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownO
 
         break;
       }
-      html.push(`<ol>${items.map((item) => `<li>${inlineMarkdown(item, options)}</li>`).join('')}</ol>`);
+      const startAttr = startNum > 1 ? ` start="${startNum}"` : '';
+      html.push(`<ol${startAttr}>${items.map((item) => `<li>${inlineMarkdown(item, options)}</li>`).join('')}</ol>`);
       continue;
     }
 
