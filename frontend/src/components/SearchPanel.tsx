@@ -4,8 +4,6 @@ import { streamAskWithLlm } from '../api/rag';
 import type { CitationItem, StreamProgressEvent } from '../types/rag';
 import { renderMarkdownToHtml } from '../utils/markdown';
 
-type AnswerTab = 'single' | 'compare';
-
 const STAGE_LABEL: Record<StreamProgressEvent['stage'], string> = {
   intent: '意图识别',
   retrieval: '检索召回',
@@ -56,40 +54,17 @@ function CitationList({
 }
 
 export function SearchPanel() {
-  const [activeTab, setActiveTab] = useState<AnswerTab>('single');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
-  const [compareLoading, setCompareLoading] = useState(false);
   const [error, setError] = useState('');
-  const [compareError, setCompareError] = useState('');
   const [answerMd, setAnswerMd] = useState('');
   const [citations, setCitations] = useState<CitationItem[]>([]);
   const [hasStarted, setHasStarted] = useState(false);
-  const [compareStarted, setCompareStarted] = useState(false);
-  const [vectorAnswerMd, setVectorAnswerMd] = useState('');
-  const [hybridAnswerMd, setHybridAnswerMd] = useState('');
-  const [vectorCitations, setVectorCitations] = useState<CitationItem[]>([]);
-  const [hybridCitations, setHybridCitations] = useState<CitationItem[]>([]);
   const [progressEvents, setProgressEvents] = useState<StreamProgressEvent[]>([]);
   const [currentStageMessage, setCurrentStageMessage] = useState('等待提问');
   const abortRef = useRef<AbortController | null>(null);
-  const compareAbortRef = useRef<{
-    vector: AbortController | null;
-    hybrid: AbortController | null;
-  }>({
-    vector: null,
-    hybrid: null
-  });
 
   const renderedHtml = useMemo(() => renderMarkdownToHtml(answerMd), [answerMd]);
-  const vectorRenderedHtml = useMemo(
-    () => renderMarkdownToHtml(vectorAnswerMd, { citationAnchorPrefix: 'vector-' }),
-    [vectorAnswerMd]
-  );
-  const hybridRenderedHtml = useMemo(
-    () => renderMarkdownToHtml(hybridAnswerMd, { citationAnchorPrefix: 'hybrid-' }),
-    [hybridAnswerMd]
-  );
 
   const onCitationRefClick = (event: ReactMouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement | null;
@@ -121,9 +96,6 @@ export function SearchPanel() {
     }
 
     abortRef.current?.abort();
-    compareAbortRef.current.vector?.abort();
-    compareAbortRef.current.hybrid?.abort();
-    compareAbortRef.current = { vector: null, hybrid: null };
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -138,7 +110,10 @@ export function SearchPanel() {
     try {
       await streamAskWithLlm(
         cleanQuery,
-        undefined,
+        {
+          retrievalMode: 'vector',
+          useGraph: false
+        },
         (chunk) => {
           setAnswerMd((prev) => prev + chunk);
         },
@@ -167,112 +142,15 @@ export function SearchPanel() {
     }
   };
 
-  const runCompare = async () => {
-    const cleanQuery = query.trim();
-    if (!cleanQuery) {
-      setCompareError('请输入查询内容');
-      return;
-    }
-
-    abortRef.current?.abort();
-    compareAbortRef.current.vector?.abort();
-    compareAbortRef.current.hybrid?.abort();
-    const vectorController = new AbortController();
-    const hybridController = new AbortController();
-    compareAbortRef.current = { vector: vectorController, hybrid: hybridController };
-
-    setLoading(false);
-    setCompareLoading(true);
-    setCompareStarted(true);
-    setCompareError('');
-    setVectorAnswerMd('');
-    setHybridAnswerMd('');
-    setVectorCitations([]);
-    setHybridCitations([]);
-
-    try {
-      const [vectorResult, hybridResult] = await Promise.allSettled([
-        streamAskWithLlm(
-          cleanQuery,
-          {
-            retrievalMode: 'vector',
-            useGraph: false
-          },
-          (chunk) => {
-            setVectorAnswerMd((prev) => prev + chunk);
-          },
-          undefined,
-          (items) => {
-            setVectorCitations(items);
-          },
-          vectorController.signal
-        ),
-        streamAskWithLlm(
-          cleanQuery,
-          {
-            retrievalMode: 'hybrid',
-            useGraph: true
-          },
-          (chunk) => {
-            setHybridAnswerMd((prev) => prev + chunk);
-          },
-          undefined,
-          (items) => {
-            setHybridCitations(items);
-          },
-          hybridController.signal
-        )
-      ]);
-
-      const errors: string[] = [];
-      if (vectorResult.status === 'rejected') {
-        const reason = vectorResult.reason;
-        if (!(reason instanceof DOMException && reason.name === 'AbortError')) {
-          errors.push(`vector: ${reason instanceof Error ? reason.message : '请求失败'}`);
-        }
-      }
-      if (hybridResult.status === 'rejected') {
-        const reason = hybridResult.reason;
-        if (!(reason instanceof DOMException && reason.name === 'AbortError')) {
-          errors.push(`hybrid: ${reason instanceof Error ? reason.message : '请求失败'}`);
-        }
-      }
-
-      if (errors.length > 0) {
-        setCompareError(errors.join(' | '));
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return;
-      }
-      setCompareError(err instanceof Error ? err.message : '对比回答失败');
-    } finally {
-      setCompareLoading(false);
-      compareAbortRef.current = { vector: null, hybrid: null };
-    }
-  };
-
   const stop = () => {
     abortRef.current?.abort();
-    compareAbortRef.current.vector?.abort();
-    compareAbortRef.current.hybrid?.abort();
-    compareAbortRef.current = { vector: null, hybrid: null };
     setLoading(false);
-    setCompareLoading(false);
   };
 
   return (
     <section className="panel">
       <header className="panel-header">
-        <h2>LLM 回答</h2>
-        <div className="segmented">
-          <button className={activeTab === 'single' ? 'active' : ''} onClick={() => setActiveTab('single')}>
-            检索回答
-          </button>
-          <button className={activeTab === 'compare' ? 'active' : ''} onClick={() => setActiveTab('compare')}>
-            对比回答
-          </button>
-        </div>
+        <h2>向量检索回答</h2>
       </header>
 
       <div className="form-grid">
@@ -282,104 +160,45 @@ export function SearchPanel() {
         </label>
       </div>
 
-      {activeTab === 'single' ? (
-        <>
-          <div className="progress-board">
-            <div className="progress-head">
-              <strong>当前进度</strong>
-              <span>{currentStageMessage}</span>
-            </div>
-            <div className="progress-steps">
-              {(['intent', 'retrieval', 'generation'] as const).map((stage) => {
-                const hit = progressEvents.find((item) => item.stage === stage);
-                const stateClass = hit ? (hit.status === 'done' ? 'done' : 'running') : 'idle';
-                return (
-                  <div key={stage} className={`progress-step ${stateClass}`}>
-                    <span>{STAGE_LABEL[stage]}</span>
-                    <small>{hit ? hit.message : '等待中'}</small>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+      <div className="progress-board">
+        <div className="progress-head">
+          <strong>当前进度</strong>
+          <span>{currentStageMessage}</span>
+        </div>
+        <div className="progress-steps">
+          {(['intent', 'retrieval', 'generation'] as const).map((stage) => {
+            const hit = progressEvents.find((item) => item.stage === stage);
+            const stateClass = hit ? (hit.status === 'done' ? 'done' : 'running') : 'idle';
+            return (
+              <div key={stage} className={`progress-step ${stateClass}`}>
+                <span>{STAGE_LABEL[stage]}</span>
+                <small>{hit ? hit.message : '等待中'}</small>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
-          <div className="actions-row">
-            <button onClick={run} disabled={loading || compareLoading}>{loading ? '回答生成中...' : '自动回答'}</button>
-            <button className="secondary-btn" onClick={stop} disabled={!loading}>停止</button>
-          </div>
+      <div className="actions-row">
+        <button onClick={run} disabled={loading}>{loading ? '回答生成中...' : '自动回答'}</button>
+        <button className="secondary-btn" onClick={stop} disabled={!loading}>停止</button>
+      </div>
 
-          {error ? <p className="error-text">{error}</p> : null}
+      {error ? <p className="error-text">{error}</p> : null}
 
-          {hasStarted ? (
-            <div
-              className="answer-box markdown-body"
-              onClick={onCitationRefClick}
-              dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }}
-            />
-          ) : null}
-
-          {hasStarted && citations.length > 0 ? (
-            <div className="citation-board">
-              <strong>引用来源</strong>
-              <CitationList items={citations} keyPrefix="single" showScores useAnchorId anchorPrefix="" />
-            </div>
-          ) : null}
-        </>
+      {hasStarted ? (
+        <div
+          className="answer-box markdown-body"
+          onClick={onCitationRefClick}
+          dangerouslySetInnerHTML={{ __html: renderedHtml || '<p class="muted">等待回答...</p>' }}
+        />
       ) : null}
 
-      {activeTab === 'compare' ? (
-        <>
-          <div className="actions-row">
-            <button onClick={runCompare} disabled={loading || compareLoading}>{compareLoading ? '对比中...' : '开始对比'}</button>
-            <button className="secondary-btn" onClick={stop} disabled={!compareLoading}>停止</button>
-          </div>
-
-          {compareError ? <p className="error-text">{compareError}</p> : null}
-
-          {compareStarted ? (
-            <div className="compare-board">
-              <article className="compare-card">
-                <header>
-                  <h3>向量检索回答</h3>
-                  <span className="muted">mode: vector</span>
-                </header>
-                <section
-                  className="compare-answer answer-box markdown-body"
-                  onClick={onCitationRefClick}
-                  dangerouslySetInnerHTML={{ __html: vectorRenderedHtml || '<p class="muted">等待回答...</p>' }}
-                />
-                <section className="compare-citations">
-                  <strong>引用来源</strong>
-                  {vectorCitations.length > 0 ? (
-                    <CitationList items={vectorCitations} keyPrefix="vector" useAnchorId anchorPrefix="vector-" />
-                  ) : (
-                    <p className="muted">暂无引用</p>
-                  )}
-                </section>
-              </article>
-
-              <article className="compare-card">
-                <header>
-                  <h3>向量 + GraphRAG 回答</h3>
-                  <span className="muted">mode: hybrid</span>
-                </header>
-                <section
-                  className="compare-answer answer-box markdown-body"
-                  onClick={onCitationRefClick}
-                  dangerouslySetInnerHTML={{ __html: hybridRenderedHtml || '<p class="muted">等待回答...</p>' }}
-                />
-                <section className="compare-citations">
-                  <strong>引用来源</strong>
-                  {hybridCitations.length > 0 ? (
-                    <CitationList items={hybridCitations} keyPrefix="hybrid" useAnchorId anchorPrefix="hybrid-" />
-                  ) : (
-                    <p className="muted">暂无引用</p>
-                  )}
-                </section>
-              </article>
-            </div>
-          ) : null}
-        </>
+      {hasStarted && citations.length > 0 ? (
+        <div className="citation-board">
+          <strong>引用来源</strong>
+          <CitationList items={citations} keyPrefix="single" showScores useAnchorId anchorPrefix="" />
+        </div>
       ) : null}
     </section>
   );
