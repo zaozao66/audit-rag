@@ -1,6 +1,26 @@
+import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Col,
+  Empty,
+  Form,
+  Input,
+  List,
+  Popconfirm,
+  Row,
+  Select,
+  Space,
+  Tag,
+  Typography
+} from 'antd';
+import type { CheckboxChangeEvent } from 'antd/es/checkbox';
+import type { ChangeEvent } from 'react';
 import { useMemo, useState } from 'react';
 import { clearAllDocuments, deleteDocument, getDocumentChunks, getDocumentDetail } from '../api/rag';
-import type { DocumentChunksData, DocumentRecord } from '../types/rag';
+import type { DocumentChunkItem, DocumentChunksData, DocumentRecord } from '../types/rag';
 
 interface DocumentsPanelProps {
   documents: DocumentRecord[];
@@ -50,8 +70,6 @@ export function DocumentsPanel({
 
   const removeDoc = async () => {
     if (!selectedId) return;
-    if (!window.confirm(`确认删除文档 ${selectedId} ?`)) return;
-
     setWorking(true);
     setError('');
     try {
@@ -68,8 +86,6 @@ export function DocumentsPanel({
   };
 
   const removeAllDocs = async () => {
-    if (!window.confirm('确认清空所有文档吗？该操作会真实删除向量和元数据，且不可恢复。')) return;
-
     setWorking(true);
     setError('');
     try {
@@ -89,107 +105,142 @@ export function DocumentsPanel({
   };
 
   return (
-    <section className="panel panel-documents">
-      <header className="panel-header">
-        <h2>文档管理</h2>
-        <div className="actions-row no-margin">
-          <button onClick={onRefresh} disabled={loading || working}>{loading ? '刷新中...' : '刷新列表'}</button>
-          <button className="danger-btn" onClick={removeAllDocs} disabled={loading || working || documents.length === 0}>
-            清空全部文档
-          </button>
-        </div>
-      </header>
-
-      <div className="form-grid">
-        <label>
-          doc_type
-          <select
-            value={docType}
-            onChange={(e) => onFilterChange({ docType: e.target.value, keyword, includeDeleted })}
+    <Card
+      title="文档管理"
+      className="app-card"
+      extra={(
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={onRefresh} loading={loading || working}>刷新列表</Button>
+          <Popconfirm
+            title="确认清空全部文档？"
+            description="该操作会真实删除向量和元数据，且不可恢复。"
+            onConfirm={removeAllDocs}
+            okButtonProps={{ danger: true }}
           >
-            <option value="">全部类型</option>
-            {docTypeOptions.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          keyword
-          <input
-            value={keyword}
-            onChange={(e) => onFilterChange({ docType, keyword: e.target.value, includeDeleted })}
-            placeholder="文件名关键字"
-          />
-        </label>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={includeDeleted}
-            onChange={(e) => onFilterChange({ docType, keyword, includeDeleted: e.target.checked })}
-          />
-          包含已删除文档
-        </label>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={includeText}
-            onChange={(e) => setIncludeText(e.target.checked)}
-          />
-          查看分块全文
-        </label>
-      </div>
+            <Button danger icon={<DeleteOutlined />} disabled={loading || working || documents.length === 0}>清空全部文档</Button>
+          </Popconfirm>
+        </Space>
+      )}
+    >
+      <Form layout="vertical">
+        <Row gutter={12}>
+          <Col xs={24} md={8}>
+            <Form.Item label="doc_type">
+              <Select
+                value={docType}
+                onChange={(value: string) => onFilterChange({ docType: value, keyword, includeDeleted })}
+                options={[{ value: '', label: '全部类型' }, ...docTypeOptions.map((type) => ({ value: type, label: type }))]}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={8}>
+            <Form.Item label="keyword">
+              <Input
+                value={keyword}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => onFilterChange({ docType, keyword: e.target.value, includeDeleted })}
+                placeholder="文件名关键字"
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={8}>
+            <Form.Item label="选项">
+              <Space direction="vertical">
+                <Checkbox
+                  checked={includeDeleted}
+                  onChange={(e: CheckboxChangeEvent) => onFilterChange({ docType, keyword, includeDeleted: e.target.checked })}
+                >
+                  包含已删除文档
+                </Checkbox>
+                <Checkbox checked={includeText} onChange={(e: CheckboxChangeEvent) => setIncludeText(e.target.checked)}>
+                  查看分块全文
+                </Checkbox>
+              </Space>
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
 
-      {error ? <p className="error-text">{error}</p> : null}
+      {error ? <Alert style={{ marginBottom: 12 }} type="error" showIcon message={error} /> : null}
 
-      <div className="documents-layout">
-        <div className="documents-list">
-          {documents.map((doc) => (
-            <button
-              key={doc.doc_id}
-              className={`doc-row ${selectedId === doc.doc_id ? 'active' : ''}`}
-              onClick={() => loadDetail(doc.doc_id)}
-              disabled={working}
-            >
-              <strong>{doc.filename || doc.doc_id}</strong>
-              <span>{doc.doc_type}</span>
-              <span>{doc.chunk_count} chunks</span>
-              <span className={`status-pill ${doc.status}`}>{doc.status}</span>
-            </button>
-          ))}
-          {documents.length === 0 ? <p className="muted">没有匹配的文档</p> : null}
-        </div>
+      <Row gutter={12}>
+        <Col xs={24} lg={9}>
+          <Card size="small" title={`文档列表 (${documents.length})`} className="app-sub-card">
+            {documents.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的文档" />
+            ) : (
+              <List
+                loading={loading || working}
+                dataSource={documents}
+                renderItem={(doc: DocumentRecord) => (
+                  <List.Item
+                    className={`doc-list-item ${selectedId === doc.doc_id ? 'active' : ''}`}
+                    onClick={() => {
+                      void loadDetail(doc.doc_id);
+                    }}
+                  >
+                    <List.Item.Meta
+                      title={doc.filename || doc.doc_id}
+                      description={(
+                        <Space size={8} wrap>
+                          <Tag>{doc.doc_type}</Tag>
+                          <Typography.Text type="secondary">{doc.chunk_count} chunks</Typography.Text>
+                          <Tag color={doc.status === 'active' ? 'green' : 'default'}>{doc.status}</Tag>
+                        </Space>
+                      )}
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+        </Col>
 
-        <div className="documents-detail">
-          {selected ? (
-            <>
-              <div className="detail-head">
-                <h3>{selected.filename}</h3>
-                <button onClick={removeDoc} disabled={working}>删除文档</button>
-              </div>
-              <p className="muted">doc_id: {selected.doc_id}</p>
-              <p className="muted">上传时间: {selected.upload_time}</p>
-              <p className="muted">版本: {selected.version} | 文件大小: {selected.file_size} bytes</p>
+        <Col xs={24} lg={15}>
+          <Card
+            size="small"
+            title={selected ? selected.filename : '文档详情'}
+            className="app-sub-card"
+            extra={selected ? (
+              <Popconfirm title="确认删除该文档？" onConfirm={removeDoc} okButtonProps={{ danger: true }}>
+                <Button danger size="small">删除文档</Button>
+              </Popconfirm>
+            ) : null}
+          >
+            {!selected ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="左侧选择一个文档查看详情" />
+            ) : (
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Typography.Text type="secondary">doc_id: {selected.doc_id}</Typography.Text>
+                <Typography.Text type="secondary">上传时间: {selected.upload_time}</Typography.Text>
+                <Typography.Text type="secondary">版本: {selected.version} | 文件大小: {selected.file_size} bytes</Typography.Text>
 
-              <div className="chunks-list">
-                {(chunkData?.chunks ?? []).map((chunk) => (
-                  <article key={chunk.chunk_id} className="chunk-item">
-                    <div className="result-head">
-                      <strong>{chunk.chunk_id}</strong>
-                      <span>{chunk.char_count} chars</span>
-                    </div>
-                    <p>{includeText ? chunk.text : chunk.text_preview}</p>
-                  </article>
-                ))}
-                {!working && selected && (chunkData?.chunks.length ?? 0) === 0 ? <p className="muted">该文档暂无分块数据</p> : null}
-              </div>
-            </>
-          ) : (
-            <p className="muted">左侧选择一个文档查看详情</p>
-          )}
-        </div>
-      </div>
-    </section>
+                <Card size="small" title={`分块列表 (${chunkData?.chunks.length ?? 0})`}>
+                  {(chunkData?.chunks ?? []).length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该文档暂无分块数据" />
+                  ) : (
+                    <List
+                      dataSource={chunkData?.chunks ?? []}
+                      renderItem={(chunk: DocumentChunkItem) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={
+                              <Space>
+                                <Typography.Text code>{chunk.chunk_id}</Typography.Text>
+                                <Typography.Text type="secondary">{chunk.char_count} chars</Typography.Text>
+                              </Space>
+                            }
+                            description={includeText ? chunk.text : chunk.text_preview}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Card>
+              </Space>
+            )}
+          </Card>
+        </Col>
+      </Row>
+    </Card>
   );
 }

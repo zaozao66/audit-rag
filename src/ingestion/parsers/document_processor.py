@@ -176,7 +176,13 @@ class DocumentProcessor:
             raise
 
 
-def process_uploaded_documents(file_paths: List[str], doc_type: str = 'internal_regulation', title: str = None, original_filenames: List[str] = None) -> List[Dict[str, Any]]:
+def process_uploaded_documents(
+    file_paths: List[str],
+    doc_type: str = 'internal_regulation',
+    title: str = None,
+    original_filenames: List[str] = None,
+    error_collector: List[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
     """
     处理用户上传的多个文档
     :param file_paths: 文件路径列表
@@ -191,6 +197,7 @@ def process_uploaded_documents(file_paths: List[str], doc_type: str = 'internal_
     
     for idx, file_path in enumerate(file_paths):
         logger.info(f"正在处理文档 {idx + 1}/{len(file_paths)}: {file_path}")
+        filename = os.path.basename(file_path)
         
         try:
             # 获取文件名：优先使用传入的原始文件名，否则从路径提取
@@ -219,8 +226,12 @@ def process_uploaded_documents(file_paths: List[str], doc_type: str = 'internal_
             
         except Exception as e:
             logger.error(f"处理文档 {file_path} 时发生错误: {e}")
+            if error_collector is not None:
+                error_collector.append({
+                    "filename": filename,
+                    "error": str(e),
+                })
             continue  # 继续处理其他文档
     
     logger.info(f"所有文档处理完成，成功处理 {len(documents)} 个文档")
     return documents
-

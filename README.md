@@ -62,6 +62,7 @@ API端点：
 - `GET  /health` - 健康检查
 - `POST /store` - 存储文档
 - `POST /upload_store` - (推荐) 上传并存储文档(文件)
+- `POST /upload_archive_store` - 上传并存储文档(压缩包)
 - `POST /search_with_intent` - 意图识别搜索
 - `POST /ask` - 非流式LLM问答
 - `POST /v1/chat/completions` - OpenAI兼容问答（支持流式SSE）

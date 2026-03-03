@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { ReloadOutlined } from '@ant-design/icons';
+import { Button, Card, Col, Row, Space, Statistic, Tag, Typography } from 'antd';
 import type { DocumentStats, InfoResponse } from '../types/rag';
 
 interface SystemPanelProps {
@@ -9,60 +10,33 @@ interface SystemPanelProps {
 }
 
 export function SystemPanel({ info, stats, loading, onRefresh }: SystemPanelProps) {
-  const [statusMsg, setStatusMsg] = useState('');
-
-  const refresh = () => {
-    setStatusMsg('已刷新');
-    onRefresh();
-  };
-
   return (
-    <section className="panel panel-metric">
-      <header className="panel-header">
-        <h2>系统状态</h2>
-        <div className="actions-row no-margin">
-          <button onClick={refresh} disabled={loading}>
-            {loading ? '刷新中...' : '刷新'}
-          </button>
-        </div>
-      </header>
+    <Card
+      title="系统状态"
+      className="app-card"
+      extra={<Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh}>刷新</Button>}
+    >
+      <Row gutter={[12, 12]}>
+        <Col xs={24} sm={12} lg={8}><Statistic title="服务状态" value={info?.status ?? '-'} /></Col>
+        <Col xs={24} sm={12} lg={8}><Statistic title="向量库" value={info?.vector_store_status ?? '-'} /></Col>
+        <Col xs={24} sm={12} lg={8}><Statistic title="向量数量" value={info?.vector_count ?? 0} /></Col>
+        <Col xs={24} sm={12} lg={8}><Statistic title="Embedding" value={info?.embedding_model ?? '-'} /></Col>
+        <Col xs={24} sm={12} lg={8}><Statistic title="分块策略" value={info?.chunker_type ?? '-'} /></Col>
+        <Col xs={24} sm={12} lg={8}><Statistic title="活跃文档" value={stats?.active_documents ?? 0} /></Col>
+        <Col xs={24} sm={12} lg={8}><Statistic title="总分块" value={stats?.total_chunks ?? 0} /></Col>
+      </Row>
 
-      <div className="metrics-grid">
-        <Metric label="服务状态" value={info?.status ?? '-'} />
-        <Metric label="向量库" value={info?.vector_store_status ?? '-'} />
-        <Metric label="向量数量" value={String(info?.vector_count ?? 0)} />
-        <Metric label="Embedding" value={info?.embedding_model ?? '-'} />
-        <Metric label="分块策略" value={info?.chunker_type ?? '-'} />
-        <Metric label="活跃文档" value={String(stats?.active_documents ?? 0)} />
-        <Metric label="总分块" value={String(stats?.total_chunks ?? 0)} />
-      </div>
-
-      <div className="type-stats">
-        <h3>文档类型分布</h3>
+      <Card style={{ marginTop: 16 }} size="small" title="文档类型分布">
         {stats && Object.keys(stats.by_type).length > 0 ? (
-          <div className="chip-row">
+          <Space wrap>
             {Object.entries(stats.by_type).map(([type, value]) => (
-              <div key={type} className="chip">
-                <span>{type}</span>
-                <strong>{value.count} docs / {value.chunks} chunks</strong>
-              </div>
+              <Tag key={type}>{type}: {value.count} docs / {value.chunks} chunks</Tag>
             ))}
-          </div>
+          </Space>
         ) : (
-          <p className="muted">暂无文档类型统计</p>
+          <Typography.Text type="secondary">暂无文档类型统计</Typography.Text>
         )}
-      </div>
-
-      {statusMsg ? <p className="muted">{statusMsg}</p> : null}
-    </section>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+      </Card>
+    </Card>
   );
 }

@@ -14,14 +14,7 @@ import type {
   StreamSessionEvent,
   StatsResponse,
   UploadResponse,
-  RetrievalOptions,
-  RebuildGraphResponse,
-  GraphEdgesResponse,
-  GraphNodesResponse,
-  GraphSubgraphResponse,
-  GraphOverviewResponse,
-  GraphNodeDetailResponse,
-  GraphPathResponse
+  RetrievalOptions
 } from '../types/rag';
 
 export function getInfo() {
@@ -45,6 +38,28 @@ export function uploadFiles(payload: {
   }
 
   return apiFetch<UploadResponse>('/upload_store', {
+    method: 'POST',
+    body: form
+  });
+}
+
+export function uploadArchive(payload: {
+  archive: File;
+  chunkerType: string;
+  docType: string;
+  title?: string;
+  saveAfterProcessing?: boolean;
+}) {
+  const form = new FormData();
+  form.append('archive', payload.archive);
+  form.append('chunker_type', payload.chunkerType);
+  form.append('doc_type', payload.docType);
+  form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
+  if (payload.title?.trim()) {
+    form.append('title', payload.title.trim());
+  }
+
+  return apiFetch<UploadResponse>('/upload_archive_store', {
     method: 'POST',
     body: form
   });
@@ -210,109 +225,10 @@ export function getDocumentStats() {
   return apiFetch<StatsResponse>('/documents/stats');
 }
 
-export function rebuildGraphIndex() {
-  return apiFetch<RebuildGraphResponse>('/graph/rebuild', {
-    method: 'POST'
-  });
-}
-
-export function getGraphNodes(params: {
-  page?: number;
-  pageSize?: number;
-  nodeType?: string;
-  keyword?: string;
-  includeEvidenceNodes?: boolean;
-}) {
-  const query = new URLSearchParams();
-  query.set('page', String(params.page ?? 1));
-  query.set('page_size', String(params.pageSize ?? 20));
-  if (params.nodeType?.trim()) query.set('node_type', params.nodeType.trim());
-  if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
-  query.set('include_evidence_nodes', String(Boolean(params.includeEvidenceNodes)));
-  return apiFetch<GraphNodesResponse>(`/graph/nodes?${query.toString()}`);
-}
-
-export function getGraphEdges(params: {
-  page?: number;
-  pageSize?: number;
-  relation?: string;
-  keyword?: string;
-  includeEvidenceNodes?: boolean;
-}) {
-  const query = new URLSearchParams();
-  query.set('page', String(params.page ?? 1));
-  query.set('page_size', String(params.pageSize ?? 20));
-  if (params.relation?.trim()) query.set('relation', params.relation.trim());
-  if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
-  query.set('include_evidence_nodes', String(Boolean(params.includeEvidenceNodes)));
-  return apiFetch<GraphEdgesResponse>(`/graph/edges?${query.toString()}`);
-}
-
-export function getGraphSubgraph(payload: {
-  query?: string;
-  nodeIds?: string[];
-  hops?: number;
-  maxNodes?: number;
-  includeEvidenceNodes?: boolean;
-}) {
-  return apiFetch<GraphSubgraphResponse>('/graph/subgraph', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      query: payload.query,
-      node_ids: payload.nodeIds ?? [],
-      hops: payload.hops ?? 2,
-      max_nodes: payload.maxNodes ?? 120,
-      include_evidence_nodes: Boolean(payload.includeEvidenceNodes)
-    })
-  });
-}
-
-export function getGraphOverview(params?: { topN?: number }) {
-  const query = new URLSearchParams();
-  if (params?.topN !== undefined) query.set('top_n', String(params.topN));
-  const suffix = query.toString() ? `?${query.toString()}` : '';
-  return apiFetch<GraphOverviewResponse>(`/graph/overview${suffix}`);
-}
-
-export function getGraphNodeDetail(nodeId: string, maxNeighbors = 120) {
-  return apiFetch<GraphNodeDetailResponse>(
-    `/graph/node/${encodeURIComponent(nodeId)}?max_neighbors=${String(maxNeighbors)}`
-  );
-}
-
-export function getGraphPath(payload: {
-  sourceNodeId?: string;
-  targetNodeId?: string;
-  sourceQuery?: string;
-  targetQuery?: string;
-  maxHops?: number;
-  maxCandidates?: number;
-  includeEvidenceNodes?: boolean;
-}) {
-  return apiFetch<GraphPathResponse>('/graph/path', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      source_node_id: payload.sourceNodeId ?? '',
-      target_node_id: payload.targetNodeId ?? '',
-      source_query: payload.sourceQuery ?? '',
-      target_query: payload.targetQuery ?? '',
-      max_hops: payload.maxHops ?? 4,
-      max_candidates: payload.maxCandidates ?? 5,
-      include_evidence_nodes: Boolean(payload.includeEvidenceNodes)
-    })
-  });
-}
-
 function buildRetrievalPayload(options?: Partial<RetrievalOptions>) {
   if (!options) return {};
 
   const payload: Record<string, unknown> = {};
   if (options.retrievalMode !== undefined) payload.retrieval_mode = options.retrievalMode;
-  if (options.useGraph !== undefined) payload.use_graph = options.useGraph;
-  if (options.graphTopK !== undefined) payload.graph_top_k = options.graphTopK;
-  if (options.graphHops !== undefined) payload.graph_hops = options.graphHops;
-  if (options.hybridAlpha !== undefined) payload.hybrid_alpha = options.hybridAlpha;
   return payload;
 }

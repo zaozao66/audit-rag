@@ -5,6 +5,11 @@ from typing import Any, Dict, List
 from flask import Blueprint, current_app, jsonify, request
 
 from src.api.services.rag_service import RAGService
+from src.ingestion.parsers.archive_processor import (
+    ArchiveValidationError,
+    extract_zip_archive,
+)
+from src.ingestion.parsers.document_processor import process_uploaded_documents
 from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
 from src.ingestion.splitters.document_chunker import DocumentChunker
@@ -13,6 +18,13 @@ from src.ingestion.splitters.smart_chunker import SmartChunker
 
 
 storage_bp = Blueprint('storage', __name__)
+
+ALLOWED_UPLOAD_EXTENSIONS = {'.pdf', '.docx', '.txt'}
+MAX_ARCHIVE_UPLOAD_BYTES = 200 * 1024 * 1024
+MAX_ARCHIVE_FILE_COUNT = 500
+MAX_ARCHIVE_SINGLE_FILE_BYTES = 30 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_COMPRESSION_RATIO = 200.0
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -25,6 +37,17 @@ def _to_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
     return default
+
+
+def _normalize_chunker_type(value: str) -> str:
+    chunker_type = value or 'smart'
+    if chunker_type == 'law':
+        return 'regulation'
+    if chunker_type == 'audit':
+        return 'audit_report'
+    if chunker_type == 'issue':
+        return 'audit_issue'
+    return chunker_type
 
 
 @storage_bp.route('/store', methods=['POST'])
@@ -310,13 +333,9 @@ def get_graph_node_detail(node_id: str):
 @storage_bp.route('/upload_store', methods=['POST'])
 def upload_and_store_documents():
     try:
-        chunker_type = request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
-        if chunker_type == 'law':
-            chunker_type = 'regulation'
-        if chunker_type == 'audit':
-            chunker_type = 'audit_report'
-        if chunker_type == 'issue':
-            chunker_type = 'audit_issue'
+        chunker_type = _normalize_chunker_type(
+            request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
+        )
 
         service: RAGService = current_app.extensions['rag_service']
         rag_processor = service.get_processor(chunker_type=chunker_type)
@@ -336,30 +355,31 @@ def upload_and_store_documents():
         temp_file_paths: List[str] = []
         original_filenames: List[str] = []
 
-        for file in uploaded_files:
-            if file and file.filename:
-                filename = file.filename.replace('/', '_').replace('\\', '_').replace('\x00', '')
-                original_filenames.append(filename)
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
-                file.save(temp_file.name)
-                temp_file_paths.append(temp_file.name)
+        try:
+            for file in uploaded_files:
+                if file and file.filename:
+                    filename = file.filename.replace('/', '_').replace('\\', '_').replace('\x00', '')
+                    original_filenames.append(filename)
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
+                    file.save(temp_file.name)
+                    temp_file_paths.append(temp_file.name)
 
-        doc_type = request.form.get('doc_type', 'internal_regulation')
-        title = request.form.get('title', None)
+            doc_type = request.form.get('doc_type', 'internal_regulation')
+            title = request.form.get('title', None)
 
-        num_processed = rag_processor.process_documents_from_files(
-            temp_file_paths,
-            save_after_processing=save_after_processing,
-            doc_type=doc_type,
-            title=title,
-            original_filenames=original_filenames,
-        )
-
-        for temp_path in temp_file_paths:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
+            num_processed = rag_processor.process_documents_from_files(
+                temp_file_paths,
+                save_after_processing=save_after_processing,
+                doc_type=doc_type,
+                title=title,
+                original_filenames=original_filenames,
+            )
+        finally:
+            for temp_path in temp_file_paths:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
         if isinstance(num_processed, dict):
             return jsonify({
@@ -383,6 +403,115 @@ def upload_and_store_documents():
     except Exception as e:
         current_app.logger.error("上传并存储文档时出错: %s", e)
         return jsonify({"error": f"上传并存储文档失败: {str(e)}"}), 500
+
+
+@storage_bp.route('/upload_archive_store', methods=['POST'])
+def upload_archive_and_store_documents():
+    temp_archive_path = None
+    try:
+        chunker_type = _normalize_chunker_type(
+            request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
+        )
+
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor(chunker_type=chunker_type)
+
+        uploaded_archive = request.files.get('archive')
+        if not uploaded_archive or not uploaded_archive.filename:
+            return jsonify({"error": "没有上传压缩包文件"}), 400
+
+        archive_name = uploaded_archive.filename.replace('/', '_').replace('\\', '_').replace('\x00', '')
+        if os.path.splitext(archive_name)[1].lower() != '.zip':
+            return jsonify({"error": "仅支持上传 ZIP 压缩包"}), 400
+
+        save_after_processing = _to_bool(request.form.get('save_after_processing', 'true'), default=True)
+        store_path = request.form.get('store_path')
+        if store_path:
+            rag_processor.vector_store_path = store_path
+
+        doc_type = request.form.get('doc_type', 'internal_regulation')
+        title = request.form.get('title', None)
+
+        temp_archive = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+        temp_archive_path = temp_archive.name
+        temp_archive.close()
+        uploaded_archive.save(temp_archive_path)
+
+        archive_size = os.path.getsize(temp_archive_path)
+        if archive_size > MAX_ARCHIVE_UPLOAD_BYTES:
+            return jsonify({"error": f"压缩包过大，超过限制 {MAX_ARCHIVE_UPLOAD_BYTES} bytes"}), 400
+
+        parse_errors: List[Dict[str, str]] = []
+        with tempfile.TemporaryDirectory() as extract_dir:
+            extraction = extract_zip_archive(
+                archive_path=temp_archive_path,
+                output_dir=extract_dir,
+                allowed_extensions=ALLOWED_UPLOAD_EXTENSIONS,
+                max_file_count=MAX_ARCHIVE_FILE_COUNT,
+                max_single_file_bytes=MAX_ARCHIVE_SINGLE_FILE_BYTES,
+                max_total_uncompressed_bytes=MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES,
+                max_compression_ratio=MAX_ARCHIVE_COMPRESSION_RATIO,
+            )
+
+            documents = process_uploaded_documents(
+                extraction.extracted_paths,
+                doc_type=doc_type,
+                title=title,
+                original_filenames=extraction.original_filenames,
+                error_collector=parse_errors,
+            )
+            if not documents:
+                return jsonify({
+                    "error": "压缩包解析后没有可入库文档",
+                    "archive_name": archive_name,
+                    "extracted_count": extraction.extracted_count,
+                    "unsupported_files": extraction.unsupported_files,
+                    "failed_files": parse_errors,
+                }), 400
+
+            num_processed = rag_processor.process_documents(
+                documents,
+                save_after_processing=save_after_processing,
+            )
+
+        if isinstance(num_processed, dict):
+            return jsonify({
+                "success": True,
+                "message": f"处理完成: 新增 {num_processed.get('processed', 0)} 个, 跳过 {num_processed.get('skipped', 0)} 个重复, 更新 {num_processed.get('updated', 0)} 个",
+                "archive_name": archive_name,
+                "file_count": extraction.extracted_count,
+                "extracted_count": extraction.extracted_count,
+                "unsupported_files": extraction.unsupported_files,
+                "failed_files": parse_errors,
+                "processed_count": num_processed.get('processed', 0),
+                "skipped_count": num_processed.get('skipped', 0),
+                "updated_count": num_processed.get('updated', 0),
+                "total_chunks": num_processed.get('total_chunks', 0),
+                "chunker_used": chunker_type,
+            })
+
+        return jsonify({
+            "success": True,
+            "message": f"成功处理了压缩包内 {num_processed} 个文本块",
+            "archive_name": archive_name,
+            "file_count": extraction.extracted_count,
+            "extracted_count": extraction.extracted_count,
+            "unsupported_files": extraction.unsupported_files,
+            "failed_files": parse_errors,
+            "processed_count": num_processed,
+            "chunker_used": chunker_type,
+        })
+    except ArchiveValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        current_app.logger.error("上传压缩包并存储文档时出错: %s", e)
+        return jsonify({"error": f"上传压缩包并存储文档失败: {str(e)}"}), 500
+    finally:
+        if temp_archive_path:
+            try:
+                os.unlink(temp_archive_path)
+            except OSError:
+                pass
 
 
 @storage_bp.route('/chunk_test', methods=['POST'])
@@ -502,8 +631,6 @@ def test_chunking_upload():
         uploaded_file.save(temp_file.name)
 
         try:
-            from src.ingestion.parsers.document_processor import process_uploaded_documents
-
             processed_docs = process_uploaded_documents([temp_file.name], doc_type=doc_type)
             if not processed_docs:
                 return jsonify({"error": "无法处理上传的文件"}), 400

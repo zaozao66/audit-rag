@@ -14,6 +14,14 @@ import os
 from src.api.app import create_app
 
 
+class ExcludeHealthEndpointFilter(logging.Filter):
+    """Filter out access logs for the health check endpoint."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return ' /health ' not in message and ' /health?' not in message
+
+
 def configure_logging() -> logging.Logger:
     env = os.getenv('ENVIRONMENT', 'development')
     if env == 'production':
@@ -49,6 +57,9 @@ def configure_logging() -> logging.Logger:
     if file_handler:
         logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+    werkzeug_logger = logging.getLogger('werkzeug')
+    werkzeug_logger.addFilter(ExcludeHealthEndpointFilter())
 
     return logger
 

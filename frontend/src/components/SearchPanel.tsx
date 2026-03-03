@@ -1,8 +1,12 @@
+import { MessageOutlined, ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Empty, Input, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { ChangeEvent, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { streamAskWithLlm } from '../api/rag';
 import type { CitationItem, StreamProgressEvent } from '../types/rag';
 import { renderMarkdownToHtml } from '../utils/markdown';
+
+const { TextArea } = Input;
 
 function createSessionId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -137,8 +141,7 @@ export function SearchPanel() {
       await streamAskWithLlm(
         payloadMessages,
         {
-          retrievalMode: 'vector',
-          useGraph: false
+          retrievalMode: 'vector'
         },
         sessionId,
         (chunk) => {
@@ -195,20 +198,14 @@ export function SearchPanel() {
   };
 
   return (
-    <section className="panel chat-panel">
-      <header className="panel-header chat-header">
-        <div>
-          <h2>多轮检索对话</h2>
-          <p className="muted">{progressText}</p>
-        </div>
-        <div className="actions-row no-margin">
-          <button className="secondary-btn" onClick={resetSession} disabled={loading}>新会话</button>
-        </div>
-      </header>
-
-      <div className="chat-session-meta muted">
-        会话ID: <code>{sessionId}</code>
-      </div>
+    <Card className="app-card chat-panel" title="多轮检索对话" extra={
+      <Button icon={<ReloadOutlined />} onClick={resetSession} disabled={loading}>新会话</Button>
+    }>
+      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+        <Typography.Text type="secondary">{progressText}</Typography.Text>
+        <Typography.Text type="secondary">会话ID: <Typography.Text code>{sessionId}</Typography.Text></Typography.Text>
+        {error ? <Alert type="error" showIcon message={error} /> : null}
+      </Space>
 
       <div className={`chat-body ${activeCitation ? 'has-citation' : ''}`}>
         <div className="chat-thread" ref={scrollRef} onClick={onCitationRefClick}>
@@ -222,26 +219,24 @@ export function SearchPanel() {
               <article key={item.id} className={`chat-bubble ${item.role}`}>
                 <div className="chat-role">{item.role === 'user' ? '你' : '助手'}</div>
                 <div className="chat-content markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
-                {item.progress ? <p className="muted chat-progress">{item.progress}</p> : null}
-                {item.error ? <p className="error-text">{item.error}</p> : null}
+                {item.progress ? <Typography.Text type="secondary" className="chat-progress">{item.progress}</Typography.Text> : null}
+                {item.error ? <Alert type="error" showIcon message={item.error} /> : null}
                 {item.role === 'assistant' && item.citations.length > 0 ? (
                   <div className="chat-citations">
                     <div className="chat-citation-tags">
                       {item.citations.map((citation) => {
-                        const isActive =
-                          activeCitation?.messageId === item.id &&
-                          activeCitation?.citation.source_id === citation.source_id;
+                        const isActive = activeCitation?.messageId === item.id && activeCitation?.citation.source_id === citation.source_id;
                         return (
-                          <button
+                          <Tag
                             key={`${item.id}-${citation.source_id}`}
-                            type="button"
-                            className={`chip ${isActive ? 'active' : ''}`}
+                            color={isActive ? 'processing' : 'default'}
+                            className="citation-tag"
                             onClick={() => {
                               openCitation(item.id, citation.source_id);
                             }}
                           >
                             [{citation.source_id}]
-                          </button>
+                          </Tag>
                         );
                       })}
                     </div>
@@ -254,42 +249,41 @@ export function SearchPanel() {
 
         <aside className={`chat-citation-panel ${activeCitation ? 'open' : ''}`}>
           {activeCitation ? (
-            <div className="chat-citation-card">
-              <div className="chat-citation-card-head">
-                <strong>引用 {activeCitation.citation.source_id}</strong>
-                <button type="button" className="secondary-btn" onClick={() => setActiveCitation(null)}>关闭</button>
-              </div>
-              <p className="muted">
+            <Card size="small" className="chat-citation-card" title={`引用 ${activeCitation.citation.source_id}`} extra={
+              <Button size="small" onClick={() => setActiveCitation(null)}>关闭</Button>
+            }>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
                 {activeCitation.citation.filename || activeCitation.citation.title || activeCitation.citation.doc_id}
-              </p>
-              <p>{activeCitation.citation.text_preview || '无文本片段'}</p>
-            </div>
+              </Typography.Paragraph>
+              <Typography.Paragraph>{activeCitation.citation.text_preview || '无文本片段'}</Typography.Paragraph>
+            </Card>
           ) : (
-            <div className="chat-citation-empty muted">点击文中引用标记或来源标签，在此查看详情</div>
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="点击文中引用标记或来源标签，在此查看详情" />
           )}
         </aside>
       </div>
 
       <div className="chat-input-area">
-        <textarea
+        <TextArea
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setQuery(e.target.value)}
           placeholder="请输入问题，支持连续追问..."
-          rows={3}
-          onKeyDown={(event) => {
+          autoSize={{ minRows: 3, maxRows: 8 }}
+          onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               void send();
             }
           }}
         />
-        <div className="actions-row no-margin">
-          <button onClick={() => void send()} disabled={loading || !query.trim()}>{loading ? '回答生成中...' : '发送'}</button>
-          <button className="secondary-btn" onClick={stop} disabled={!loading}>停止</button>
-        </div>
+        <Space>
+          <Button type="primary" icon={<SendOutlined />} onClick={() => void send()} disabled={loading || !query.trim()}>
+            {loading ? '回答生成中...' : '发送'}
+          </Button>
+          <Button icon={<StopOutlined />} onClick={stop} disabled={!loading}>停止</Button>
+          <Button icon={<MessageOutlined />} onClick={resetSession} disabled={loading}>重置会话</Button>
+        </Space>
       </div>
-
-      {error ? <p className="error-text">{error}</p> : null}
-    </section>
+    </Card>
   );
 }
