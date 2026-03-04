@@ -147,6 +147,26 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
           ].filter(Boolean).join('；')}
         />
       ) : null}
+
+      {result?.failed_files?.length ? (
+        <Alert
+          style={{ marginTop: 12 }}
+          type="warning"
+          showIcon
+          message={`失败文件详情（${result.failed_files.length}）`}
+          description={
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {result.failed_files.map((item, index) => (
+                <div key={`${item.filename}-${index}`} style={{ marginBottom: 8 }}>
+                  <Typography.Text strong>{item.filename}</Typography.Text>
+                  <br />
+                  <Typography.Text type="secondary">{item.error}</Typography.Text>
+                </div>
+              ))}
+            </div>
+          }
+        />
+      ) : null}
     </Card>
   );
 }

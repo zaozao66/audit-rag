@@ -6,7 +6,6 @@ import {
   Checkbox,
   Col,
   Empty,
-  Form,
   Input,
   List,
   Popconfirm,
@@ -50,6 +49,8 @@ export function DocumentsPanel({
   const [includeText, setIncludeText] = useState(false);
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
+  const [docPageSize, setDocPageSize] = useState(10);
+  const [chunkPageSize, setChunkPageSize] = useState(10);
 
   const selected = useMemo(() => documents.find((item) => item.doc_id === selectedId) ?? null, [documents, selectedId]);
 
@@ -122,55 +123,54 @@ export function DocumentsPanel({
         </Space>
       )}
     >
-      <Form layout="vertical">
-        <Row gutter={12}>
-          <Col xs={24} md={8}>
-            <Form.Item label="doc_type">
-              <Select
-                value={docType}
-                onChange={(value: string) => onFilterChange({ docType: value, keyword, includeDeleted })}
-                options={[{ value: '', label: '全部类型' }, ...docTypeOptions.map((type) => ({ value: type, label: type }))]}
-              />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={8}>
-            <Form.Item label="keyword">
-              <Input
-                value={keyword}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => onFilterChange({ docType, keyword: e.target.value, includeDeleted })}
-                placeholder="文件名关键字"
-              />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={8}>
-            <Form.Item label="选项">
-              <Space direction="vertical">
-                <Checkbox
-                  checked={includeDeleted}
-                  onChange={(e: CheckboxChangeEvent) => onFilterChange({ docType, keyword, includeDeleted: e.target.checked })}
-                >
-                  包含已删除文档
-                </Checkbox>
-                <Checkbox checked={includeText} onChange={(e: CheckboxChangeEvent) => setIncludeText(e.target.checked)}>
-                  查看分块全文
-                </Checkbox>
-              </Space>
-            </Form.Item>
-          </Col>
-        </Row>
-      </Form>
+      <Card size="small" className="app-sub-card docs-filter-card">
+        <Space wrap size={[12, 8]}>
+          <Typography.Text type="secondary">筛选</Typography.Text>
+          <Select
+            value={docType}
+            style={{ width: 220 }}
+            onChange={(value: string) => onFilterChange({ docType: value, keyword, includeDeleted })}
+            options={[{ value: '', label: '全部类型' }, ...docTypeOptions.map((type) => ({ value: type, label: type }))]}
+          />
+          <Input
+            value={keyword}
+            allowClear
+            style={{ width: 260 }}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => onFilterChange({ docType, keyword: e.target.value, includeDeleted })}
+            placeholder="文件名关键字"
+          />
+          <Checkbox
+            checked={includeDeleted}
+            onChange={(e: CheckboxChangeEvent) => onFilterChange({ docType, keyword, includeDeleted: e.target.checked })}
+          >
+            包含已删除文档
+          </Checkbox>
+          <Checkbox checked={includeText} onChange={(e: CheckboxChangeEvent) => setIncludeText(e.target.checked)}>
+            查看分块全文
+          </Checkbox>
+        </Space>
+      </Card>
 
       {error ? <Alert style={{ marginBottom: 12 }} type="error" showIcon message={error} /> : null}
 
-      <Row gutter={12}>
+      <Row gutter={12} className="documents-main-row">
         <Col xs={24} lg={9}>
-          <Card size="small" title={`文档列表 (${documents.length})`} className="app-sub-card">
+          <Card size="small" title={`文档列表 (${documents.length})`} className="app-sub-card list-pane-card">
             {documents.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的文档" />
             ) : (
               <List
+                className="doc-list-scroll"
                 loading={loading || working}
                 dataSource={documents}
+                pagination={{
+                  pageSize: docPageSize,
+                  showSizeChanger: true,
+                  pageSizeOptions: ['10', '20', '50'],
+                  onShowSizeChange: (_, size) => setDocPageSize(size),
+                  showTotal: (total) => `共 ${total} 条`,
+                  size: 'small'
+                }}
                 renderItem={(doc: DocumentRecord) => (
                   <List.Item
                     className={`doc-list-item ${selectedId === doc.doc_id ? 'active' : ''}`}
@@ -199,7 +199,7 @@ export function DocumentsPanel({
           <Card
             size="small"
             title={selected ? selected.filename : '文档详情'}
-            className="app-sub-card"
+            className="app-sub-card list-pane-card"
             extra={selected ? (
               <Popconfirm title="确认删除该文档？" onConfirm={removeDoc} okButtonProps={{ danger: true }}>
                 <Button danger size="small">删除文档</Button>
@@ -210,16 +210,21 @@ export function DocumentsPanel({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="左侧选择一个文档查看详情" />
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                <Typography.Text type="secondary">doc_id: {selected.doc_id}</Typography.Text>
-                <Typography.Text type="secondary">上传时间: {selected.upload_time}</Typography.Text>
-                <Typography.Text type="secondary">版本: {selected.version} | 文件大小: {selected.file_size} bytes</Typography.Text>
-
                 <Card size="small" title={`分块列表 (${chunkData?.chunks.length ?? 0})`}>
                   {(chunkData?.chunks ?? []).length === 0 ? (
                     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该文档暂无分块数据" />
                   ) : (
                     <List
+                      className="chunk-list-scroll"
                       dataSource={chunkData?.chunks ?? []}
+                      pagination={{
+                        pageSize: chunkPageSize,
+                        showSizeChanger: true,
+                        pageSizeOptions: ['10', '20', '50'],
+                        onShowSizeChange: (_, size) => setChunkPageSize(size),
+                        showTotal: (total) => `共 ${total} 条`,
+                        size: 'small'
+                      }}
                       renderItem={(chunk: DocumentChunkItem) => (
                         <List.Item>
                           <List.Item.Meta
@@ -236,6 +241,12 @@ export function DocumentsPanel({
                     />
                   )}
                 </Card>
+                <Space size={16} wrap>
+                  <Typography.Text type="secondary">doc_id: {selected.doc_id}</Typography.Text>
+                  <Typography.Text type="secondary">上传时间: {selected.upload_time}</Typography.Text>
+                  <Typography.Text type="secondary">版本: {selected.version}</Typography.Text>
+                  <Typography.Text type="secondary">文件大小: {selected.file_size} bytes</Typography.Text>
+                </Space>
               </Space>
             )}
           </Card>

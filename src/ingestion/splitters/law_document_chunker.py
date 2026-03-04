@@ -60,8 +60,8 @@ class LawDocumentChunker(DocumentChunker):
             
         logger.info(f"开始按法规结构分块文档: {filename}")
             
-        # 按行分割文本
-        lines = text.split('\n')
+        # 按行分割文本，并对PDF抽取常见的重复字伪影做归一化
+        lines = [self._normalize_extracted_line(line) for line in text.split('\n')]
             
         # 识别章节结构
         sections = self._identify_sections(lines)
@@ -74,28 +74,18 @@ class LawDocumentChunker(DocumentChunker):
             section_type = section['type']
             section_content = section['content']
             section_header = section['header']
-                
-            # 更新当前章节路径
-            if section_type in ['chapter', 'section']:
-                # 如果是章节，则更新路径
-                if section_type == 'chapter':
-                    current_section_path = [section_header]
-                elif section_type == 'section':
-                    if len(current_section_path) > 0:
-                        current_section_path.append(section_header)
-                    else:
-                        current_section_path = [section_header]
-            elif section_type == 'article':
-                # 如果是条款，保持当前路径
-                pass
-            elif section_type == 'sub_article':
-                # 子条款不需要更新路径，它属于前一个条款
-                continue  # 跳过子条款，因为它们已经被合并到父级条款中
-                
+
             # 跳过子条款的处理，因为它们已经被合并到父级中
             if section_type == 'sub_article':
                 continue
-                    
+
+            # 计算本块的章节路径（避免“路径标题 + 当前标题”重复）
+            chunk_section_path = current_section_path.copy()
+            if section_type == 'chapter' and section_header:
+                chunk_section_path = [section_header]
+            elif section_type == 'section' and section_header:
+                chunk_section_path = current_section_path.copy() + [section_header]
+
             # 将章节标题添加到内容前面
             section_title = ' '.join(current_section_path)
             if section_header and section_header != section_title:
@@ -117,9 +107,10 @@ class LawDocumentChunker(DocumentChunker):
                 
             # 检查内容长度，如果太长则进一步分块
             if len(full_content) > self.chunk_size:
-                sub_chunks = self._split_large_content(full_content, current_section_path, document)
+                sub_chunks = self._split_large_content(full_content, chunk_section_path, document)
                 chunks.extend(sub_chunks)
             else:
+                skip_current_chunk = False
                 # 过滤掉只有标题而没有实质内容的块
                 # 检查是否只是标题而没有实际内容
                 if section_header:
@@ -127,7 +118,7 @@ class LawDocumentChunker(DocumentChunker):
                     content_without_header = full_content.replace(section_header, '', 1).strip()
                                     
                     # 如果当前section_path不为空，也从内容中移除章节路径的标题（避免路径信息影响判断）
-                    for path_header in current_section_path:
+                    for path_header in chunk_section_path:
                         content_without_header = content_without_header.replace(path_header, '', 1)
                                                     
                     content_without_header = content_without_header.strip()
@@ -142,7 +133,7 @@ class LawDocumentChunker(DocumentChunker):
                     # 特殊处理：如果是章节类型（chapter/section）且没有实质性内容，则跳过
                     if section_type in ['chapter', 'section'] and meaningful_chars < 5:
                         logger.debug(f"跳过仅有标题或内容过少的章节: {section_header}")
-                        continue
+                        skip_current_chunk = True
                                         
                     # 对于article类型，如果标题后没有实质内容（如"第七条"后面没有任何内容），也跳过
                     if section_type == 'article':
@@ -155,21 +146,31 @@ class LawDocumentChunker(DocumentChunker):
                         # 如果是简单的序号条款且主要内容是注释，则跳过
                         if is_simple_numbered_article and is_mainly_comment:
                             logger.debug(f"跳过内容主要是注释的简单条款: {section_header}")
-                            continue
-                    
-                chunk = {
-                    'doc_id': document.get('doc_id', ''),
-                    'filename': filename,
-                    'file_type': document.get('file_type', ''),
-                    'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
-                    'title': document.get('title', ''),  # 添加标题
-                    'text': full_content,
-                    'semantic_boundary': section_type,
-                    'section_path': current_section_path.copy(),
-                    'header': section_header,
-                    'char_count': len(full_content)
-                }
-                chunks.append(chunk)
+                            skip_current_chunk = True
+
+                if not skip_current_chunk:
+                    chunk = {
+                        'doc_id': document.get('doc_id', ''),
+                        'filename': filename,
+                        'file_type': document.get('file_type', ''),
+                        'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
+                        'title': document.get('title', ''),  # 添加标题
+                        'text': full_content,
+                        'semantic_boundary': section_type,
+                        'section_path': chunk_section_path.copy(),
+                        'header': section_header,
+                        'char_count': len(full_content)
+                    }
+                    chunks.append(chunk)
+
+            # 处理完当前块后再更新路径，避免当前标题重复进入前缀
+            if section_type == 'chapter':
+                current_section_path = [section_header] if section_header else []
+            elif section_type == 'section':
+                if current_section_path:
+                    current_section_path = current_section_path + [section_header] if section_header else current_section_path
+                else:
+                    current_section_path = [section_header] if section_header else []
             
         logger.info(f"法规文档分块完成，共生成 {len(chunks)} 个文本块")
         return chunks
@@ -385,3 +386,39 @@ class LawDocumentChunker(DocumentChunker):
                 return True
         
         return False
+
+    @staticmethod
+    def _is_cjk_char(char: str) -> bool:
+        """判断是否为常见中文字符"""
+        return '\u4e00' <= char <= '\u9fff'
+
+    def _normalize_extracted_line(self, line: str) -> str:
+        """
+        归一化PDF抽取常见伪影：
+        1. 去除首尾空白
+        2. 在“重复字占比明显偏高”时，压缩连续重复中文字符
+        """
+        stripped = line.strip()
+        if not stripped:
+            return ''
+
+        # 对“第...条/章/节”前缀做定向归一化，避免误伤正文中的合法叠字
+        heading_prefix_match = re.match(r'^(第[^\s，。；：、,.:;]{1,30})', stripped)
+        if heading_prefix_match:
+            heading_prefix = heading_prefix_match.group(1)
+            normalized_heading_prefix = re.sub(r'([\u4e00-\u9fff])\1+', r'\1', heading_prefix)
+            if normalized_heading_prefix != heading_prefix:
+                stripped = normalized_heading_prefix + stripped[len(heading_prefix):]
+
+        cjk_count = sum(1 for ch in stripped if self._is_cjk_char(ch))
+        duplicate_pairs = sum(
+            1
+            for i in range(len(stripped) - 1)
+            if stripped[i] == stripped[i + 1] and self._is_cjk_char(stripped[i])
+        )
+
+        # 阈值设计：至少2处重复且重复占比>=10%，再做压缩，避免误伤正常词
+        if cjk_count > 0 and duplicate_pairs >= 2 and (duplicate_pairs / cjk_count) >= 0.10:
+            stripped = re.sub(r'([\u4e00-\u9fff])\1+', r'\1', stripped)
+
+        return stripped

@@ -1,4 +1,4 @@
-import { FileSearchOutlined, FileTextOutlined, MessageOutlined } from '@ant-design/icons';
+import { FileSearchOutlined, FileTextOutlined, InboxOutlined, MessageOutlined } from '@ant-design/icons';
 import { Layout, Menu, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -61,6 +61,7 @@ export default function App() {
 
   const selectedKey = useMemo(() => {
     if (location.pathname.startsWith('/system')) return 'system';
+    if (location.pathname.startsWith('/upload')) return 'upload';
     if (location.pathname.startsWith('/documents')) return 'documents';
     return 'chat';
   }, [location.pathname]);
@@ -80,6 +81,7 @@ export default function App() {
           selectedKeys={[selectedKey]}
           items={[
             { key: 'chat', icon: <MessageOutlined />, label: '检索对话' },
+            { key: 'upload', icon: <InboxOutlined />, label: '文档上传' },
             { key: 'documents', icon: <FileTextOutlined />, label: '文档管理' },
             { key: 'system', icon: <FileSearchOutlined />, label: '系统状态' }
           ]}
@@ -98,10 +100,17 @@ export default function App() {
               element={<SearchPanel />}
             />
             <Route
-              path="/documents"
+              path="/upload"
               element={(
                 <div className="tab-content tab-documents">
                   <UploadPanel onUploaded={refreshAll} />
+                </div>
+              )}
+            />
+            <Route
+              path="/documents"
+              element={(
+                <div className="tab-content tab-documents">
                   <DocumentsPanel
                     documents={documents}
                     docTypeOptions={Object.keys(stats?.by_type ?? {})}

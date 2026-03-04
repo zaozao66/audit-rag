@@ -73,9 +73,10 @@ class DocumentMetadataStore:
         except Exception as e:
             logger.error(f"保存元数据失败: {e}")
     
-    def add_document(self, record: DocumentRecord) -> bool:
+    def add_document(self, record: DocumentRecord, save: bool = True) -> bool:
         """
         添加文档记录
+        :param save: 是否立即落盘
         :return: True表示新增，False表示更新
         """
         if record.doc_id in self.documents:
@@ -87,12 +88,14 @@ class DocumentMetadataStore:
             existing.status = "active"
             existing.file_path = record.file_path
             existing.filename = record.filename
-            self.save()
+            if save:
+                self.save()
             logger.info(f"更新文档记录: {record.filename}, 版本: {existing.version}")
             return False  # 更新
         
         self.documents[record.doc_id] = record
-        self.save()
+        if save:
+            self.save()
         logger.info(f"新增文档记录: {record.filename}")
         return True  # 新增
     

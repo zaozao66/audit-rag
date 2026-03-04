@@ -354,6 +354,7 @@ def upload_and_store_documents():
 
         temp_file_paths: List[str] = []
         original_filenames: List[str] = []
+        parse_errors: List[Dict[str, str]] = []
 
         try:
             for file in uploaded_files:
@@ -373,6 +374,7 @@ def upload_and_store_documents():
                 doc_type=doc_type,
                 title=title,
                 original_filenames=original_filenames,
+                error_collector=parse_errors,
             )
         finally:
             for temp_path in temp_file_paths:
@@ -390,6 +392,7 @@ def upload_and_store_documents():
                 "skipped_count": num_processed.get('skipped', 0),
                 "updated_count": num_processed.get('updated', 0),
                 "total_chunks": num_processed.get('total_chunks', 0),
+                "failed_files": parse_errors,
                 "chunker_used": chunker_type,
             })
 
@@ -398,6 +401,7 @@ def upload_and_store_documents():
             "message": f"成功处理了 {len(uploaded_files)} 个文件，生成了 {num_processed} 个文本块",
             "file_count": len(uploaded_files),
             "processed_count": num_processed,
+            "failed_files": parse_errors,
             "chunker_used": chunker_type,
         })
     except Exception as e:

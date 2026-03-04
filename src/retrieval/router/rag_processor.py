@@ -39,6 +39,7 @@ RECTIFICATION_STATUS_LABELS = {
     "pending": "待整改",
 }
 EVIDENCE_NODE_TYPES = {ontology.ENTITY_CHUNK, ontology.ENTITY_DOCUMENT}
+EMBEDDING_INPUT_MAX_CHARS = 8192
 
 
 class RAGProcessor:
@@ -207,10 +208,41 @@ class RAGProcessor:
 
         return changed
 
+    def _log_oversized_chunks(self, chunks: List[Dict[str, Any]], max_chars: int = EMBEDDING_INPUT_MAX_CHARS) -> None:
+        oversized = []
+        for chunk in chunks:
+            text = str(chunk.get("text", "") or "")
+            text_len = len(text)
+            if text_len <= max_chars:
+                continue
+            oversized.append((chunk, text_len))
+
+        if not oversized:
+            return
+
+        logger.warning(
+            "检测到 %s 个超长分块(> %s 字符)，后续嵌入调用可能失败",
+            len(oversized),
+            max_chars,
+        )
+        for chunk, text_len in oversized:
+            logger.warning(
+                "超长分块详情: filename=%s title=%s doc_id=%s chunk_id=%s semantic_boundary=%s header=%s section_path=%s char_count=%s",
+                chunk.get("filename", ""),
+                chunk.get("title", ""),
+                chunk.get("doc_id", ""),
+                chunk.get("chunk_id", ""),
+                chunk.get("semantic_boundary", ""),
+                chunk.get("header", ""),
+                " > ".join(chunk.get("section_path", []) or []),
+                text_len,
+            )
+
     def process_documents(self, documents: List[Dict[str, Any]], save_after_processing: bool = True) -> Dict:
         processed_count = 0
         skipped_count = 0
         updated_count = 0
+        pending_entries: List[Dict[str, Any]] = []
 
         for doc in documents:
             content = doc["text"]
@@ -226,12 +258,26 @@ class RAGProcessor:
             doc["doc_id"] = doc_id
             chunks = self.chunker.chunk_documents([doc])
             chunks = self._normalize_chunks(chunks, doc_id)
+            self._log_oversized_chunks(chunks)
 
             if not chunks:
                 logger.warning("文档未生成有效分块: %s", doc.get("filename", "unknown"))
                 continue
 
-            texts = [c["text"] for c in chunks]
+            pending_entries.append({
+                "doc": doc,
+                "doc_id": doc_id,
+                "content": content,
+                "content_hash": content_hash,
+                "chunks": chunks,
+            })
+
+        if pending_entries:
+            all_chunks: List[Dict[str, Any]] = []
+            for entry in pending_entries:
+                all_chunks.extend(entry["chunks"])
+
+            texts = [c["text"] for c in all_chunks]
             embeddings = self.embedding_provider.get_embeddings(texts)
 
             if self.vector_store is None:
@@ -241,26 +287,33 @@ class RAGProcessor:
                     self.dimension = len(embeddings[0]) if embeddings else 1024
                     self.vector_store = VectorStore(dimension=self.dimension)
 
-            self.vector_store.add_embeddings(embeddings, chunks)
+            self.vector_store.add_embeddings(embeddings, all_chunks)
 
-            record = DocumentRecord(
-                doc_id=doc_id,
-                filename=doc.get("filename", "unknown"),
-                content_hash=content_hash,
-                file_path=doc.get("file_path", ""),
-                file_size=len(content.encode("utf-8")),
-                doc_type=doc.get("doc_type", "unknown"),
-                upload_time=datetime.now().isoformat(),
-                chunk_count=len(chunks),
-            )
+            metadata_dirty = False
+            for entry in pending_entries:
+                doc = entry["doc"]
+                record = DocumentRecord(
+                    doc_id=entry["doc_id"],
+                    filename=doc.get("filename", "unknown"),
+                    content_hash=entry["content_hash"],
+                    file_path=doc.get("file_path", ""),
+                    file_size=len(entry["content"].encode("utf-8")),
+                    doc_type=doc.get("doc_type", "unknown"),
+                    upload_time=datetime.now().isoformat(),
+                    chunk_count=len(entry["chunks"]),
+                )
 
-            is_new = self.metadata_store.add_document(record)
-            if is_new:
-                processed_count += 1
-                logger.info("新增文档: %s, chunks: %s", doc.get("filename", "unknown"), len(chunks))
-            else:
-                updated_count += 1
-                logger.info("更新文档: %s", doc.get("filename", "unknown"))
+                is_new = self.metadata_store.add_document(record, save=False)
+                metadata_dirty = True
+                if is_new:
+                    processed_count += 1
+                    logger.info("新增文档: %s, chunks: %s", doc.get("filename", "unknown"), len(entry["chunks"]))
+                else:
+                    updated_count += 1
+                    logger.info("更新文档: %s", doc.get("filename", "unknown"))
+
+            if metadata_dirty:
+                self.metadata_store.save()
 
         if self.vector_store:
             self.retriever = VectorRetriever(self.vector_store, self.embedding_provider)
@@ -1632,6 +1685,7 @@ class RAGProcessor:
         doc_type: str = "internal_regulation",
         title: str = None,
         original_filenames: List[str] = None,
+        error_collector: Optional[List[Dict[str, str]]] = None,
     ) -> Dict:
         from src.ingestion.parsers.document_processor import process_uploaded_documents
 
@@ -1640,6 +1694,7 @@ class RAGProcessor:
             doc_type=doc_type,
             title=title,
             original_filenames=original_filenames,
+            error_collector=error_collector,
         )
         if not processed_documents:
             return {"processed": 0, "skipped": 0, "updated": 0, "total_chunks": 0}
