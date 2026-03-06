@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../audit-fe-ui"
+		}
+	],
+	"settings": {}
+}
