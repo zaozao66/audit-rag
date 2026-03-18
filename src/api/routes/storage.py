@@ -50,6 +50,88 @@ def _normalize_chunker_type(value: str) -> str:
     return chunker_type
 
 
+def _infer_catalog_level(semantic_boundary: str, header: str, section_path: List[str]) -> int:
+    boundary = str(semantic_boundary or '').lower()
+    normalized_header = str(header or '').strip()
+
+    if boundary == 'chapter':
+        return 1
+    if boundary == 'section':
+        return 2
+    if boundary == 'article':
+        return 3
+
+    if normalized_header.startswith('第') and '章' in normalized_header:
+        return 1
+    if normalized_header.startswith('第') and '节' in normalized_header:
+        return 2
+    if normalized_header.startswith('第') and '条' in normalized_header:
+        return 3
+
+    return max(1, min(6, len(section_path) + 1))
+
+
+def _format_chunks_with_catalog(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    formatted_chunks: List[Dict[str, Any]] = []
+    catalog: List[Dict[str, Any]] = []
+    full_text_lines: List[str] = []
+    seen_catalog_keys = set()
+    next_line_no = 1
+
+    for i, chunk in enumerate(chunks):
+        text = str(chunk.get('text', '') or '')
+        lines = text.splitlines() or ['']
+        line_start = next_line_no
+        line_end = next_line_no + len(lines) - 1
+        full_text_lines.extend(lines)
+
+        section_path = [str(item).strip() for item in (chunk.get('section_path', []) or []) if str(item).strip()]
+        header = str(chunk.get('header', '') or '').strip()
+
+        if header:
+            catalog_path = section_path.copy()
+            if not catalog_path or catalog_path[-1] != header:
+                catalog_path.append(header)
+
+            catalog_key = tuple(catalog_path) if catalog_path else (header,)
+            if catalog_key not in seen_catalog_keys:
+                seen_catalog_keys.add(catalog_key)
+                anchor_line = line_start
+                for offset, line in enumerate(lines):
+                    normalized_line = line.strip()
+                    if normalized_line and normalized_line.startswith(header):
+                        anchor_line = line_start + offset
+                        break
+
+                catalog.append({
+                    'id': f'catalog_{len(catalog) + 1}',
+                    'title': header,
+                    'level': _infer_catalog_level(chunk.get('semantic_boundary', ''), header, section_path),
+                    'line_no': anchor_line,
+                    'chunk_id': i + 1,
+                    'section_path': catalog_path,
+                })
+
+        formatted_chunks.append({
+            'chunk_id': i + 1,
+            'text': text,
+            'full_text_length': len(text),
+            'semantic_boundary': chunk.get('semantic_boundary', 'content'),
+            'section_path': chunk.get('section_path', []),
+            'header': chunk.get('header', ''),
+            'char_count': chunk.get('char_count', len(text)),
+            'line_start': line_start,
+            'line_end': line_end,
+        })
+        next_line_no = line_end + 1
+
+    return {
+        'formatted_chunks': formatted_chunks,
+        'catalog': catalog,
+        'full_text_lines': full_text_lines,
+    }
+
+
 @storage_bp.route('/store', methods=['POST'])
 def store_documents():
     try:
@@ -574,23 +656,17 @@ def test_chunking():
             chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
 
         chunks = chunker.chunk_documents([temp_document])
-        formatted_chunks = []
-        for i, chunk in enumerate(chunks):
-            formatted_chunks.append({
-                "chunk_id": i + 1,
-                "text": chunk['text'],
-                "full_text_length": len(chunk['text']),
-                "semantic_boundary": chunk.get('semantic_boundary', 'content'),
-                "section_path": chunk.get('section_path', []),
-                "header": chunk.get('header', ''),
-                "char_count": chunk.get('char_count', len(chunk['text'])),
-            })
+        preview_payload = _format_chunks_with_catalog(chunks)
+        formatted_chunks = preview_payload['formatted_chunks']
 
         return jsonify({
             "success": True,
             "chunker_used": chunker_type,
             "original_text_length": len(text),
             "chunks_count": len(chunks),
+            "total_lines": len(preview_payload['full_text_lines']),
+            "catalog": preview_payload['catalog'],
+            "full_text_lines": preview_payload['full_text_lines'],
             "chunks": formatted_chunks,
         })
     except Exception as e:
@@ -664,17 +740,8 @@ def test_chunking_upload():
                 chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
 
             chunks = chunker.chunk_documents([temp_document])
-            formatted_chunks = []
-            for i, chunk in enumerate(chunks):
-                formatted_chunks.append({
-                    "chunk_id": i + 1,
-                    "text": chunk['text'],
-                    "full_text_length": len(chunk['text']),
-                    "semantic_boundary": chunk.get('semantic_boundary', 'content'),
-                    "section_path": chunk.get('section_path', []),
-                    "header": chunk.get('header', ''),
-                    "char_count": chunk.get('char_count', len(chunk['text'])),
-                })
+            preview_payload = _format_chunks_with_catalog(chunks)
+            formatted_chunks = preview_payload['formatted_chunks']
 
             return jsonify({
                 "success": True,
@@ -683,6 +750,9 @@ def test_chunking_upload():
                 "chunker_used": chunker_type,
                 "original_text_length": len(text),
                 "chunks_count": len(chunks),
+                "total_lines": len(preview_payload['full_text_lines']),
+                "catalog": preview_payload['catalog'],
+                "full_text_lines": preview_payload['full_text_lines'],
                 "chunks": formatted_chunks,
             })
         finally:

@@ -148,16 +148,30 @@ export interface ListDocumentsResponse {
 export interface DocumentChunkItem {
   chunk_index: number;
   chunk_id: string;
+  global_index?: number;
   text?: string;
   text_preview: string;
   char_count: number;
+  line_start?: number;
+  line_end?: number;
   metadata: {
     filename: string;
     doc_type: string;
     page_nos: number[];
     header: string;
     section_path: string[];
+    semantic_boundary: string;
   };
+}
+
+export interface DocumentCatalogItem {
+  id: string;
+  title: string;
+  level: number;
+  line_no: number;
+  page_no?: number | null;
+  chunk_id: string;
+  section_path: string[];
 }
 
 export interface DocumentChunksData {
@@ -167,6 +181,10 @@ export interface DocumentChunksData {
   upload_time: string;
   chunk_count: number;
   total_chars: number;
+  total_lines?: number;
+  full_text_source?: 'stored_full_text' | 'reloaded_file' | 'chunk_fallback' | 'missing_full_text' | string;
+  catalog: DocumentCatalogItem[];
+  full_text_lines: string[];
   chunks: DocumentChunkItem[];
 }
 

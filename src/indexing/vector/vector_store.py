@@ -132,23 +132,35 @@ class VectorStore:
         :return: 分块信息列表
         """
         chunks = []
-        for idx, doc in enumerate(self.documents):
+        doc_chunk_index = 0
+        for global_idx, doc in enumerate(self.documents):
             if doc.get('doc_id') == doc_id:
+                chunk_index = doc.get('chunk_index')
+                if chunk_index is None:
+                    chunk_index = doc_chunk_index
+                try:
+                    chunk_index = int(chunk_index)
+                except (TypeError, ValueError):
+                    chunk_index = doc_chunk_index
+
                 chunk_info = {
-                    'chunk_index': idx,
-                    'chunk_id': doc.get('chunk_id', f'{doc_id}_chunk_{idx}'),
+                    'chunk_index': chunk_index,
+                    'chunk_id': doc.get('chunk_id', f'{doc_id}_chunk_{doc_chunk_index}'),
                     'text': doc.get('text', ''),
                     'text_preview': doc.get('text', '')[:200] + '...' if len(doc.get('text', '')) > 200 else doc.get('text', ''),
                     'char_count': len(doc.get('text', '')),
+                    'global_index': global_idx,
                     'metadata': {
                         'filename': doc.get('filename', ''),
                         'doc_type': doc.get('doc_type', ''),
                         'page_nos': doc.get('page_nos', []),
                         'header': doc.get('header', ''),
-                        'section_path': doc.get('section_path', [])
+                        'section_path': doc.get('section_path', []),
+                        'semantic_boundary': doc.get('semantic_boundary', ''),
                     }
                 }
                 chunks.append(chunk_info)
+                doc_chunk_index += 1
         return chunks
     
     def get_chunk_by_id(self, chunk_id: str) -> Optional[Dict]:

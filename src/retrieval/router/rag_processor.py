@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -94,7 +95,75 @@ class RAGProcessor:
         logger.info("使用【%s】分块器", chunker_type)
 
     def _graph_store_path(self, base_path: str = None) -> str:
-        return f"{base_path or self.vector_store_path}.graph.json"
+        base = os.path.abspath(base_path or self.vector_store_path)
+        return f"{base}.graph.json"
+
+    def _full_text_store_dir(self, base_path: str = None) -> str:
+        base = os.path.abspath(base_path or self.vector_store_path)
+        return f"{base}.fulltext"
+
+    def _full_text_path(self, doc_id: str, base_path: str = None) -> str:
+        return os.path.join(self._full_text_store_dir(base_path), f"{doc_id}.txt")
+
+    def _original_store_dir(self, base_path: str = None) -> str:
+        base = os.path.abspath(base_path or self.vector_store_path)
+        return f"{base}.originals"
+
+    def _safe_suffix_from_paths(self, filename: str, source_path: str) -> str:
+        filename_ext = os.path.splitext(str(filename or ""))[1]
+        source_ext = os.path.splitext(str(source_path or ""))[1]
+        suffix = filename_ext or source_ext or ".bin"
+        if not suffix.startswith("."):
+            suffix = f".{suffix}"
+        return suffix.lower()
+
+    def _original_file_path(self, doc_id: str, filename: str = "", source_path: str = "", base_path: str = None) -> str:
+        suffix = self._safe_suffix_from_paths(filename, source_path)
+        return os.path.join(self._original_store_dir(base_path), f"{doc_id}{suffix}")
+
+    def _persist_original_file(
+        self,
+        doc_id: str,
+        source_path: str,
+        filename: str = "",
+        base_path: str = None,
+    ) -> Optional[str]:
+        source = str(source_path or "").strip()
+        if not source or not os.path.exists(source):
+            return None
+
+        target = self._original_file_path(doc_id, filename=filename, source_path=source, base_path=base_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        try:
+            shutil.copy2(source, target)
+            return target
+        except Exception as e:
+            logger.warning("持久化原始文件失败: doc_id=%s source=%s err=%s", doc_id, source, e)
+            return None
+
+    def _save_full_text(self, doc_id: str, text: str, base_path: str = None) -> None:
+        path = self._full_text_path(doc_id, base_path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text or "")
+
+    def _load_full_text(self, doc_id: str, base_path: str = None) -> Optional[str]:
+        path = self._full_text_path(doc_id, base_path)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            logger.warning("读取原文缓存失败: doc_id=%s err=%s", doc_id, e)
+            return None
+
+    def _delete_full_text(self, doc_id: str, base_path: str = None) -> bool:
+        path = self._full_text_path(doc_id, base_path)
+        if not os.path.exists(path):
+            return False
+        os.remove(path)
+        return True
 
     def _ensure_vector_store(self):
         if not self.vector_store:
@@ -251,6 +320,18 @@ class RAGProcessor:
 
             existing = self.metadata_store.get_document(doc_id)
             if existing and existing.status == "active":
+                if self._load_full_text(doc_id) is None:
+                    self._save_full_text(doc_id, content)
+                existing_path = str(existing.file_path or "").strip()
+                if not existing_path or not os.path.exists(existing_path):
+                    persisted = self._persist_original_file(
+                        doc_id=doc_id,
+                        source_path=doc.get("file_path", ""),
+                        filename=doc.get("filename", ""),
+                    )
+                    if persisted:
+                        existing.file_path = persisted
+                        self.metadata_store.save()
                 logger.info("文档已存在，跳过: %s", doc.get("filename", "unknown"))
                 skipped_count += 1
                 continue
@@ -292,11 +373,16 @@ class RAGProcessor:
             metadata_dirty = False
             for entry in pending_entries:
                 doc = entry["doc"]
+                original_file_path = self._persist_original_file(
+                    doc_id=entry["doc_id"],
+                    source_path=doc.get("file_path", ""),
+                    filename=doc.get("filename", ""),
+                )
                 record = DocumentRecord(
                     doc_id=entry["doc_id"],
                     filename=doc.get("filename", "unknown"),
                     content_hash=entry["content_hash"],
-                    file_path=doc.get("file_path", ""),
+                    file_path=original_file_path or doc.get("file_path", ""),
                     file_size=len(entry["content"].encode("utf-8")),
                     doc_type=doc.get("doc_type", "unknown"),
                     upload_time=datetime.now().isoformat(),
@@ -304,6 +390,7 @@ class RAGProcessor:
                 )
 
                 is_new = self.metadata_store.add_document(record, save=False)
+                self._save_full_text(entry["doc_id"], entry["content"])
                 metadata_dirty = True
                 if is_new:
                     processed_count += 1
@@ -1705,12 +1792,73 @@ class RAGProcessor:
         records = self.metadata_store.list_documents(doc_type=doc_type, status=status, keyword=keyword)
         return [r.to_dict() for r in records]
 
+    def get_document_id_by_filename(self, filename: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        target_name = str(filename or "").strip()
+        if not target_name:
+            return None
+
+        status = None if include_deleted else "active"
+        records = self.metadata_store.list_documents(status=status)
+        exact = [r for r in records if str(r.filename or "").strip() == target_name]
+        if not exact:
+            lowered = target_name.lower()
+            exact = [r for r in records if str(r.filename or "").strip().lower() == lowered]
+        if not exact:
+            return None
+
+        latest = exact[0]
+        return {
+            "filename": latest.filename,
+            "doc_id": latest.doc_id,
+            "upload_time": latest.upload_time,
+            "status": latest.status,
+            "matched_count": len(exact),
+            "candidates": [
+                {
+                    "doc_id": r.doc_id,
+                    "upload_time": r.upload_time,
+                    "status": r.status,
+                }
+                for r in exact[:20]
+            ],
+        }
+
+    def get_document_detail_by_filename(self, filename: str) -> Optional[Dict]:
+        target_name = str(filename or "").strip()
+        if not target_name:
+            return None
+
+        active_records = self.metadata_store.list_documents(status="active")
+        exact = [r for r in active_records if str(r.filename or "").strip() == target_name]
+        if not exact:
+            lowered = target_name.lower()
+            exact = [r for r in active_records if str(r.filename or "").strip().lower() == lowered]
+        if not exact:
+            return None
+
+        # list_documents 已按 upload_time 倒序，取第一个即最新上传版本
+        return self.get_document_detail(exact[0].doc_id)
+
     def get_document_detail(self, doc_id: str) -> Optional[Dict]:
         record = self.metadata_store.get_document(doc_id)
         if not record:
             return None
 
         detail = record.to_dict()
+        file_path = str(detail.get("file_path", "") or "").strip()
+        if file_path:
+            if not os.path.isabs(file_path):
+                file_path = os.path.abspath(file_path)
+            if os.path.exists(file_path):
+                detail["file_path"] = file_path
+            else:
+                fallback_original = self._original_file_path(
+                    doc_id=doc_id,
+                    filename=detail.get("filename", ""),
+                    source_path=detail.get("filename", ""),
+                )
+                if os.path.exists(fallback_original):
+                    detail["file_path"] = fallback_original
 
         if not self.vector_store:
             try:
@@ -1725,6 +1873,306 @@ class RAGProcessor:
 
         return detail
 
+    @staticmethod
+    def _infer_catalog_level(semantic_boundary: str, header: str, section_path: List[str]) -> int:
+        boundary = str(semantic_boundary or "").lower()
+        normalized_header = str(header or "").strip()
+
+        if boundary == "chapter":
+            return 1
+        if boundary == "section":
+            return 2
+        if boundary == "article":
+            return 3
+
+        if re.match(r"^第[一二三四五六七八九十\d]+章", normalized_header):
+            return 1
+        if re.match(r"^第[一二三四五六七八九十\d]+节", normalized_header):
+            return 2
+        if re.match(r"^第[一二三四五六七八九十\d]+条", normalized_header):
+            return 3
+
+        return max(1, min(6, len(section_path) + 1))
+
+    def _build_document_catalog_and_preview(
+        self,
+        chunks: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+        ordered_chunks = sorted(
+            chunks,
+            key=lambda c: (
+                int(c.get("chunk_index", 0) or 0),
+                int(c.get("global_index", 0) or 0),
+            ),
+        )
+
+        enriched_chunks: List[Dict[str, Any]] = []
+        catalog: List[Dict[str, Any]] = []
+        preview_lines: List[str] = []
+        seen_catalog_keys: Set[Tuple[str, ...]] = set()
+
+        next_line_no = 1
+
+        for chunk in ordered_chunks:
+            chunk_copy = dict(chunk)
+            raw_text = str(chunk_copy.get("text", "") or "")
+            lines = raw_text.splitlines() or [""]
+            line_start = next_line_no
+            line_end = next_line_no + len(lines) - 1
+
+            chunk_copy["line_start"] = line_start
+            chunk_copy["line_end"] = line_end
+            preview_lines.extend(lines)
+
+            metadata = chunk_copy.get("metadata", {}) or {}
+            header = str(metadata.get("header", "") or "").strip()
+            semantic_boundary = str(metadata.get("semantic_boundary", "") or "")
+            section_path_raw = metadata.get("section_path") or []
+            section_path = [str(item).strip() for item in section_path_raw if str(item).strip()]
+
+            if header:
+                catalog_path = section_path.copy()
+                if not catalog_path or catalog_path[-1] != header:
+                    catalog_path.append(header)
+                catalog_key = tuple(catalog_path) if catalog_path else (header,)
+
+                if catalog_key not in seen_catalog_keys:
+                    seen_catalog_keys.add(catalog_key)
+                    anchor_line = line_start
+                    for offset, line in enumerate(lines):
+                        normalized_line = line.strip()
+                        if normalized_line and normalized_line.startswith(header):
+                            anchor_line = line_start + offset
+                            break
+
+                    catalog.append(
+                        {
+                            "id": f"catalog_{len(catalog) + 1}",
+                            "title": header,
+                            "level": self._infer_catalog_level(semantic_boundary, header, section_path),
+                            "line_no": anchor_line,
+                            "chunk_id": chunk_copy.get("chunk_id", ""),
+                            "section_path": catalog_path,
+                        }
+                    )
+
+            enriched_chunks.append(chunk_copy)
+            next_line_no = line_end + 1
+
+        return enriched_chunks, catalog, preview_lines
+
+    @staticmethod
+    def _normalize_for_line_match(text: str) -> str:
+        return re.sub(r"\s+", "", str(text or ""))
+
+    def _split_full_text_lines_with_page_map(self, full_text: str) -> Tuple[List[str], List[Optional[int]]]:
+        lines: List[str] = []
+        line_pages: List[Optional[int]] = []
+        current_page: Optional[int] = None
+
+        for raw_line in str(full_text or "").splitlines():
+            matches = PAGE_PATTERN.findall(raw_line)
+            if matches:
+                try:
+                    current_page = int(matches[-1])
+                except ValueError:
+                    current_page = current_page
+
+            cleaned_line = PAGE_PATTERN.sub("", raw_line).strip()
+            if not cleaned_line:
+                continue
+
+            lines.append(cleaned_line)
+            line_pages.append(current_page)
+
+        return lines, line_pages
+
+    @staticmethod
+    def _is_line_in_ranges(index: int, ranges: List[Tuple[int, int]]) -> bool:
+        for start, end in ranges:
+            if start <= index <= end:
+                return True
+        return False
+
+    @staticmethod
+    def _looks_like_toc_heading_line(line: str) -> bool:
+        normalized = str(line or "").strip()
+        if not normalized:
+            return False
+        if normalized in {"序言", "附录"}:
+            return True
+        if re.match(r"^第[一二三四五六七八九十百千万\d]+[章节]\s*", normalized):
+            return True
+        if re.match(r"^第[一二三四五六七八九十百千万\d]+节", normalized):
+            return True
+        if re.search(r"[·.。]{2,}\s*\d+\s*$", normalized):
+            return True
+        return False
+
+    def _detect_toc_line_ranges(self, full_text_lines: List[str]) -> List[Tuple[int, int]]:
+        ranges: List[Tuple[int, int]] = []
+        idx = 0
+        total = len(full_text_lines)
+
+        while idx < total:
+            normalized = str(full_text_lines[idx] or "").strip()
+            if normalized not in {"目录", "目 录", "目录：", "目 录："}:
+                idx += 1
+                continue
+
+            start = idx
+            cursor = idx + 1
+            heading_count = 0
+
+            while cursor < total and (cursor - start) <= 140:
+                line = str(full_text_lines[cursor] or "").strip()
+                if not line:
+                    cursor += 1
+                    continue
+                if self._looks_like_toc_heading_line(line):
+                    heading_count += 1
+                    cursor += 1
+                    continue
+                break
+
+            if heading_count >= 3:
+                ranges.append((start, max(start, cursor - 1)))
+                idx = cursor
+            else:
+                idx += 1
+
+        return ranges
+
+    def _find_header_line_no(
+        self,
+        full_text_lines: List[str],
+        header: str,
+        start_idx: int = 0,
+        skip_ranges: Optional[List[Tuple[int, int]]] = None,
+    ) -> Optional[int]:
+        if not full_text_lines:
+            return None
+
+        normalized_header = self._normalize_for_line_match(header)
+        if not normalized_header:
+            return None
+
+        for idx in range(max(0, start_idx), len(full_text_lines)):
+            if skip_ranges and self._is_line_in_ranges(idx, skip_ranges):
+                continue
+            normalized_line = self._normalize_for_line_match(full_text_lines[idx])
+            if normalized_line.startswith(normalized_header):
+                return idx + 1
+
+        for idx, line in enumerate(full_text_lines):
+            if skip_ranges and self._is_line_in_ranges(idx, skip_ranges):
+                continue
+            normalized_line = self._normalize_for_line_match(line)
+            if normalized_line.startswith(normalized_header):
+                return idx + 1
+
+        return None
+
+    def _build_catalog_from_full_text(
+        self,
+        chunks: List[Dict[str, Any]],
+        full_text_lines: List[str],
+    ) -> List[Dict[str, Any]]:
+        ordered_chunks = sorted(
+            chunks,
+            key=lambda c: (
+                int(c.get("chunk_index", 0) or 0),
+                int(c.get("global_index", 0) or 0),
+            ),
+        )
+
+        catalog_by_key: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+        search_start_idx = 0
+        toc_ranges = self._detect_toc_line_ranges(full_text_lines)
+
+        for chunk in ordered_chunks:
+            metadata = chunk.get("metadata", {}) or {}
+            header = str(metadata.get("header", "") or "").strip()
+            semantic_boundary = str(metadata.get("semantic_boundary", "") or "")
+            section_path_raw = metadata.get("section_path") or []
+            section_path = [str(item).strip() for item in section_path_raw if str(item).strip()]
+
+            if not header and not section_path:
+                continue
+
+            node_titles = section_path.copy()
+            if header and (not node_titles or node_titles[-1] != header):
+                node_titles.append(header)
+
+            if not node_titles:
+                continue
+
+            for idx, node_title in enumerate(node_titles):
+                catalog_path = node_titles[: idx + 1]
+                catalog_key = tuple(catalog_path)
+
+                line_no = self._find_header_line_no(
+                    full_text_lines,
+                    node_title,
+                    start_idx=search_start_idx,
+                    skip_ranges=toc_ranges,
+                )
+                if line_no is not None:
+                    search_start_idx = max(search_start_idx, line_no - 1)
+                else:
+                    line_no = 1
+
+                if idx == len(node_titles) - 1 and header:
+                    level = self._infer_catalog_level(semantic_boundary, header, section_path)
+                else:
+                    level = max(1, min(6, idx + 1))
+
+                candidate = {
+                    "title": node_title,
+                    "level": level,
+                    "line_no": line_no,
+                    "chunk_id": chunk.get("chunk_id", ""),
+                    "section_path": catalog_path,
+                }
+
+                existing = catalog_by_key.get(catalog_key)
+                # 避免PDF“目录页”先命中造成正文章节缺失：同路径取更靠后的命中
+                if existing is None or int(candidate["line_no"]) >= int(existing["line_no"]):
+                    catalog_by_key[catalog_key] = candidate
+
+        catalog = sorted(
+            catalog_by_key.values(),
+            key=lambda item: (int(item.get("line_no", 0) or 0), int(item.get("level", 0) or 0)),
+        )
+        for i, item in enumerate(catalog):
+            item["id"] = f"catalog_{i + 1}"
+
+        return catalog
+
+    def _resolve_document_full_text(self, record: DocumentRecord) -> Tuple[List[str], List[Optional[int]], str]:
+        doc_id = record.doc_id
+
+        stored_text = self._load_full_text(doc_id)
+        if stored_text is not None:
+            lines, line_pages = self._split_full_text_lines_with_page_map(stored_text)
+            return lines, line_pages, "stored_full_text"
+
+        file_path = str(record.file_path or "").strip()
+        if file_path and not os.path.isabs(file_path):
+            file_path = os.path.abspath(file_path)
+        if file_path and os.path.exists(file_path):
+            try:
+                from src.ingestion.parsers.document_processor import DocumentProcessor
+
+                loaded_text = DocumentProcessor.load_document(file_path, doc_type=record.doc_type)
+                self._save_full_text(doc_id, loaded_text)
+                lines, line_pages = self._split_full_text_lines_with_page_map(loaded_text)
+                return lines, line_pages, "reloaded_file"
+            except Exception as e:
+                logger.warning("从文件回读原文失败: doc_id=%s file_path=%s err=%s", doc_id, file_path, e)
+
+        return [], [], "missing_full_text"
+
     def get_document_chunks(self, doc_id: str, include_text: bool = True) -> Dict:
         record = self.metadata_store.get_document(doc_id)
         if not record:
@@ -1736,13 +2184,35 @@ class RAGProcessor:
             except Exception as e:
                 return {"error": f"向量库未加载: {str(e)}"}
 
-        chunks = self.vector_store.get_document_chunks(doc_id)
+        raw_chunks = self.vector_store.get_document_chunks(doc_id)
+        chunks, _, fallback_preview_lines = self._build_document_catalog_and_preview(raw_chunks)
+        full_text_lines, full_text_line_pages, full_text_source = self._resolve_document_full_text(record)
+        if not full_text_lines:
+            full_text_lines = fallback_preview_lines
+            full_text_line_pages = [None] * len(full_text_lines)
+            full_text_source = "chunk_fallback"
+
+        catalog = self._build_catalog_from_full_text(chunks, full_text_lines)
+        chunk_page_hint: Dict[str, Optional[int]] = {}
+        for c in chunks:
+            page_nos = (c.get("metadata", {}) or {}).get("page_nos", []) or []
+            chunk_page_hint[str(c.get("chunk_id", ""))] = int(page_nos[0]) if page_nos else None
+        for item in catalog:
+            line_no = int(item.get("line_no", 0) or 0)
+            page_no: Optional[int] = None
+            if 1 <= line_no <= len(full_text_line_pages):
+                page_no = full_text_line_pages[line_no - 1]
+            if page_no is None:
+                page_no = chunk_page_hint.get(str(item.get("chunk_id", "")))
+            item["page_no"] = page_no
 
         total_chars = sum(c["char_count"] for c in chunks)
         avg_chunk_size = total_chars // len(chunks) if chunks else 0
+        total_lines = len(full_text_lines)
 
         if not include_text:
             chunks = [{k: v for k, v in c.items() if k != "text"} for c in chunks]
+            full_text_lines = []
 
         return {
             "doc_id": doc_id,
@@ -1752,14 +2222,32 @@ class RAGProcessor:
             "chunk_count": len(chunks),
             "total_chars": total_chars,
             "avg_chunk_size": avg_chunk_size,
+            "total_lines": total_lines,
+            "full_text_source": full_text_source,
+            "catalog": catalog,
+            "full_text_lines": full_text_lines,
             "chunks": chunks,
         }
 
     def delete_document(self, doc_id: str) -> Dict:
+        record = self.metadata_store.get_document(doc_id)
+        if not record:
+            return {"success": False, "error": "文档不存在"}
         if not self.metadata_store.delete_document(doc_id):
             return {"success": False, "error": "文档不存在"}
 
         removed_chunks = 0
+        removed_full_text = self._delete_full_text(doc_id)
+        removed_original_file = False
+        original_path = str(record.file_path or "").strip() if record else ""
+        if original_path and not os.path.isabs(original_path):
+            original_path = os.path.abspath(original_path)
+        if original_path and os.path.exists(original_path):
+            try:
+                os.remove(original_path)
+                removed_original_file = True
+            except Exception as e:
+                logger.warning("删除原始文件失败: doc_id=%s path=%s err=%s", doc_id, original_path, e)
         if self.vector_store:
             removed_chunks = self.vector_store.remove_document_chunks(doc_id)
 
@@ -1771,6 +2259,8 @@ class RAGProcessor:
             "success": True,
             "doc_id": doc_id,
             "removed_chunks": removed_chunks,
+            "removed_full_text": removed_full_text,
+            "removed_original_file": removed_original_file,
         }
 
     def get_document_stats(self) -> Dict:
@@ -1791,12 +2281,26 @@ class RAGProcessor:
                 os.remove(path)
                 removed_vector_files += 1
 
+        removed_full_text_files = 0
+        full_text_dir = self._full_text_store_dir()
+        if os.path.isdir(full_text_dir):
+            removed_full_text_files = sum(1 for name in os.listdir(full_text_dir) if name.endswith(".txt"))
+            shutil.rmtree(full_text_dir, ignore_errors=True)
+
+        removed_original_files = 0
+        original_dir = self._original_store_dir()
+        if os.path.isdir(original_dir):
+            removed_original_files = sum(1 for name in os.listdir(original_dir) if os.path.isfile(os.path.join(original_dir, name)))
+            shutil.rmtree(original_dir, ignore_errors=True)
+
         return {
             "success": True,
             "removed_documents": doc_stats.get("removed_total", 0),
             "removed_active_documents": doc_stats.get("removed_active", 0),
             "removed_deleted_documents": doc_stats.get("removed_deleted", 0),
             "removed_vector_files": removed_vector_files,
+            "removed_full_text_files": removed_full_text_files,
+            "removed_original_files": removed_original_files,
         }
 
 

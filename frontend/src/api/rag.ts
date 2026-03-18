@@ -203,10 +203,19 @@ export function getDocumentDetail(docId: string) {
   return apiFetch<DocumentDetailResponse>(`/documents/${encodeURIComponent(docId)}`);
 }
 
+export function getDocumentDetailByFilename(filename: string) {
+  const query = new URLSearchParams({ filename });
+  return apiFetch<DocumentDetailResponse>(`/documents/by-filename?${query.toString()}`);
+}
+
 export function getDocumentChunks(docId: string, includeText: boolean) {
   return apiFetch<DocumentChunksResponse>(
     `/documents/${encodeURIComponent(docId)}/chunks?include_text=${String(includeText)}`
   );
+}
+
+export function getDocumentRawUrl(docId: string) {
+  return `${API_BASE}/documents/${encodeURIComponent(docId)}/raw`;
 }
 
 export function deleteDocument(docId: string) {

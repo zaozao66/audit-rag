@@ -18,6 +18,10 @@ class LawDocumentChunker(DocumentChunker):
         super().__init__(chunk_size=chunk_size, overlap=overlap)
         
         # 法规文档常见的层级模式
+        self.preamble_patterns = [
+            r'^(序\s*言|前\s*言)\s*$',  # 序言/前言（可能含空格）
+        ]
+
         self.chapter_patterns = [
             r'^第[一二三四五六七八九十\d]+章\s*[^\n]*',  # 第X章
             r'^第[一二三四五六七八九十\d]+节\s*[^\n]*',  # 第X节
@@ -45,7 +49,7 @@ class LawDocumentChunker(DocumentChunker):
         ]
         
         # 组合所有模式
-        self.all_patterns = self.chapter_patterns + self.sub_article_patterns
+        self.all_patterns = self.preamble_patterns + self.chapter_patterns + self.sub_article_patterns
         
 
     
@@ -84,10 +88,17 @@ class LawDocumentChunker(DocumentChunker):
             if section_type == 'chapter' and section_header:
                 chunk_section_path = [section_header]
             elif section_type == 'section' and section_header:
-                chunk_section_path = current_section_path.copy() + [section_header]
+                chapter_context = self._extract_chapter_context(current_section_path)
+                chunk_section_path = chapter_context + [section_header]
 
             # 将章节标题添加到内容前面
-            section_title = ' '.join(current_section_path)
+            # chapter 不继承上一章节前缀；section 仅继承章级前缀；article/content 继承当前路径
+            if section_type == 'chapter':
+                section_title = ''
+            elif section_type == 'section':
+                section_title = ' '.join(chunk_section_path[:-1])
+            else:
+                section_title = ' '.join(current_section_path)
             if section_header and section_header != section_title:
                 # 避免重复标题，只添加不重复的部分
                 if section_content.startswith(section_header):
@@ -105,75 +116,88 @@ class LawDocumentChunker(DocumentChunker):
             else:
                 full_content = section_content.strip()
                 
-            # 检查内容长度，如果太长则进一步分块
-            if len(full_content) > self.chunk_size:
+            # 检查内容长度：仅对无结构的 content 块做拆分；章/节/条保持结构语义与目录稳定
+            should_split = len(full_content) > self.chunk_size and section_type == 'content'
+            if should_split:
                 sub_chunks = self._split_large_content(full_content, chunk_section_path, document)
-                chunks.extend(sub_chunks)
-            else:
-                skip_current_chunk = False
-                # 过滤掉只有标题而没有实质内容的块
-                # 检查是否只是标题而没有实际内容
-                if section_header:
-                    # 移除标题部分，得到除标题和章节路径外的内容
-                    content_without_header = full_content.replace(section_header, '', 1).strip()
-                                    
-                    # 如果当前section_path不为空，也从内容中移除章节路径的标题（避免路径信息影响判断）
-                    for path_header in chunk_section_path:
-                        content_without_header = content_without_header.replace(path_header, '', 1)
-                                                    
-                    content_without_header = content_without_header.strip()
-                                    
-                    # 移除可能的注释（如 # 这个只有标题没有内容）
-                    content_without_comments = re.sub(r'#.*$', '', content_without_header, flags=re.MULTILINE).strip()
-                                    
-                    # 检查除标题外的内容是否为空或只有很少的有效字符
-                    # 计算有意义的字符（中文、英文字母、数字、标点符号）
-                    meaningful_chars = sum(1 for c in content_without_comments if c.isalnum() or c in '，。！？；：、""\'\'（）【】[]《》〈〉「」『』…—')
-                                        
-                    # 特殊处理：如果是章节类型（chapter/section）且没有实质性内容，则跳过
-                    if section_type in ['chapter', 'section'] and meaningful_chars < 5:
-                        logger.debug(f"跳过仅有标题或内容过少的章节: {section_header}")
-                        skip_current_chunk = True
-                                        
-                    # 对于article类型，如果标题后没有实质内容（如"第七条"后面没有任何内容），也跳过
-                    if section_type == 'article':
-                        # 检查是否是简单序号标题（如"第X条"）且内容主要是注释
-                        is_simple_numbered_article = re.match(r'^第[一二三四五六七八九十\d]+条', section_header.strip())
-                        
-                        # 检查内容是否主要是注释
-                        is_mainly_comment = '#' in section_header and meaningful_chars < 5
-                        
-                        # 如果是简单的序号条款且主要内容是注释，则跳过
-                        if is_simple_numbered_article and is_mainly_comment:
-                            logger.debug(f"跳过内容主要是注释的简单条款: {section_header}")
-                            skip_current_chunk = True
+                if sub_chunks:
+                    chunks.extend(sub_chunks)
+                    continue
+                # 兜底：分割失败时回退原块，避免内容丢失（曾出现“第五条”被吞）
+                logger.warning(f"大块内容分割后为空，回退原块: {section_header[:30] if section_header else 'unknown'}")
 
-                if not skip_current_chunk:
-                    chunk = {
-                        'doc_id': document.get('doc_id', ''),
-                        'filename': filename,
-                        'file_type': document.get('file_type', ''),
-                        'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
-                        'title': document.get('title', ''),  # 添加标题
-                        'text': full_content,
-                        'semantic_boundary': section_type,
-                        'section_path': chunk_section_path.copy(),
-                        'header': section_header,
-                        'char_count': len(full_content)
-                    }
-                    chunks.append(chunk)
+            skip_current_chunk = False
+            # 过滤掉只有标题而没有实质内容的块
+            # 检查是否只是标题而没有实际内容
+            if section_header:
+                # 移除标题部分，得到除标题和章节路径外的内容
+                content_without_header = full_content.replace(section_header, '', 1).strip()
+                                
+                # 如果当前section_path不为空，也从内容中移除章节路径的标题（避免路径信息影响判断）
+                for path_header in chunk_section_path:
+                    content_without_header = content_without_header.replace(path_header, '', 1)
+                                                
+                content_without_header = content_without_header.strip()
+                                
+                # 移除可能的注释（如 # 这个只有标题没有内容）
+                content_without_comments = re.sub(r'#.*$', '', content_without_header, flags=re.MULTILINE).strip()
+                                
+                # 检查除标题外的内容是否为空或只有很少的有效字符
+                # 计算有意义的字符（中文、英文字母、数字、标点符号）
+                meaningful_chars = sum(1 for c in content_without_comments if c.isalnum() or c in '，。！？；：、""\'\'（）【】[]《》〈〉「」『』…—')
+                                    
+                # 特殊处理：如果是章节类型（chapter/section）且没有实质性内容，则跳过
+                if section_type in ['chapter', 'section'] and meaningful_chars < 5:
+                    logger.debug(f"跳过仅有标题或内容过少的章节: {section_header}")
+                    skip_current_chunk = True
+                                    
+                # 对于article类型，如果标题后没有实质内容（如"第七条"后面没有任何内容），也跳过
+                if section_type == 'article':
+                    # 检查是否是简单序号标题（如"第X条"）且内容主要是注释
+                    is_simple_numbered_article = re.match(r'^第[一二三四五六七八九十\d]+条', section_header.strip())
+                    
+                    # 检查内容是否主要是注释
+                    is_mainly_comment = '#' in section_header and meaningful_chars < 5
+                    
+                    # 如果是简单的序号条款且主要内容是注释，则跳过
+                    if is_simple_numbered_article and is_mainly_comment:
+                        logger.debug(f"跳过内容主要是注释的简单条款: {section_header}")
+                        skip_current_chunk = True
+
+            if not skip_current_chunk:
+                chunk = {
+                    'doc_id': document.get('doc_id', ''),
+                    'filename': filename,
+                    'file_type': document.get('file_type', ''),
+                    'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
+                    'title': document.get('title', ''),  # 添加标题
+                    'text': full_content,
+                    'semantic_boundary': section_type,
+                    'section_path': chunk_section_path.copy(),
+                    'header': section_header,
+                    'char_count': len(full_content)
+                }
+                chunks.append(chunk)
 
             # 处理完当前块后再更新路径，避免当前标题重复进入前缀
             if section_type == 'chapter':
                 current_section_path = [section_header] if section_header else []
             elif section_type == 'section':
-                if current_section_path:
-                    current_section_path = current_section_path + [section_header] if section_header else current_section_path
-                else:
-                    current_section_path = [section_header] if section_header else []
+                chapter_context = self._extract_chapter_context(current_section_path)
+                current_section_path = chapter_context + [section_header] if section_header else chapter_context
             
         logger.info(f"法规文档分块完成，共生成 {len(chunks)} 个文本块")
         return chunks
+
+    def _extract_chapter_context(self, section_path: List[str]) -> List[str]:
+        """
+        提取章节上下文中的“章”层级，避免“节”被错误叠加为上一个节的子级。
+        """
+        for header in section_path:
+            normalized = str(header or "").strip()
+            if re.match(r'^第[一二三四五六七八九十\d]+章', normalized):
+                return [normalized]
+        return []
     
     def _identify_sections(self, lines: List[str]) -> List[Dict[str, Any]]:
         """
@@ -243,6 +267,13 @@ class LawDocumentChunker(DocumentChunker):
             if match:
                 header = match.group(0)
                 return 'sub_article', header
+
+        # 检查序言/前言（作为章节层级处理，确保独立成块）
+        for pattern in self.preamble_patterns:
+            match = re.match(pattern, stripped_line)
+            if match:
+                normalized = re.sub(r'\s+', '', match.group(1))
+                return 'chapter', normalized
         
         # 检查章节模式
         for pattern in self.chapter_patterns:

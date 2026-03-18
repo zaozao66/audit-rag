@@ -1,4 +1,4 @@
-import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EyeOutlined, FilePdfOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -17,7 +17,7 @@ import {
 } from 'antd';
 import type { CheckboxChangeEvent } from 'antd/es/checkbox';
 import type { ChangeEvent } from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { clearAllDocuments, deleteDocument, getDocumentChunks, getDocumentDetail } from '../api/rag';
 import type { DocumentChunkItem, DocumentChunksData, DocumentRecord } from '../types/rag';
 
@@ -51,16 +51,19 @@ export function DocumentsPanel({
   const [working, setWorking] = useState(false);
   const [docPageSize, setDocPageSize] = useState(10);
   const [chunkPageSize, setChunkPageSize] = useState(10);
+  const [activeCatalogId, setActiveCatalogId] = useState('');
+  const [activeLineNo, setActiveLineNo] = useState<number | null>(null);
+  const previewLineRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const selected = useMemo(() => documents.find((item) => item.doc_id === selectedId) ?? null, [documents, selectedId]);
 
-  const loadDetail = async (docId: string) => {
+  const loadDetail = async (docId: string, includeTextValue: boolean = includeText) => {
     setSelectedId(docId);
     setError('');
     setWorking(true);
     try {
       await getDocumentDetail(docId);
-      const chunks = await getDocumentChunks(docId, includeText);
+      const chunks = await getDocumentChunks(docId, includeTextValue);
       setChunkData(chunks.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载文档详情失败');
@@ -77,6 +80,8 @@ export function DocumentsPanel({
       await deleteDocument(selectedId);
       setChunkData(null);
       setSelectedId('');
+      setActiveCatalogId('');
+      setActiveLineNo(null);
       onRefresh();
       onDataChanged?.();
     } catch (err) {
@@ -93,6 +98,8 @@ export function DocumentsPanel({
       const result = await clearAllDocuments();
       setChunkData(null);
       setSelectedId('');
+      setActiveCatalogId('');
+      setActiveLineNo(null);
       onRefresh();
       onDataChanged?.();
       if (!result.success) {
@@ -103,6 +110,39 @@ export function DocumentsPanel({
     } finally {
       setWorking(false);
     }
+  };
+
+  useEffect(() => {
+    previewLineRefs.current = {};
+    const firstCatalog = chunkData?.catalog?.[0];
+    if (firstCatalog) {
+      setActiveCatalogId(firstCatalog.id);
+      setActiveLineNo(firstCatalog.line_no);
+    } else {
+      setActiveCatalogId('');
+      setActiveLineNo(null);
+    }
+  }, [chunkData]);
+
+  const jumpToLine = (lineNo: number, catalogId: string) => {
+    const target = previewLineRefs.current[lineNo];
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setActiveCatalogId(catalogId);
+    setActiveLineNo(lineNo);
+  };
+
+  const openPreviewPage = () => {
+    if (!selectedId) return;
+    const previewUrl = `${window.location.origin}${window.location.pathname}#/documents/preview/${encodeURIComponent(selectedId)}`;
+    window.open(previewUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const openPdfPreviewPage = () => {
+    if (!selectedId || !selected?.filename) return;
+    const previewUrl = `${window.location.origin}${window.location.pathname}#/documents/pdf-preview-by-filename/${encodeURIComponent(selected.filename)}`;
+    window.open(previewUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -145,7 +185,16 @@ export function DocumentsPanel({
           >
             包含已删除文档
           </Checkbox>
-          <Checkbox checked={includeText} onChange={(e: CheckboxChangeEvent) => setIncludeText(e.target.checked)}>
+          <Checkbox
+            checked={includeText}
+            onChange={(e: CheckboxChangeEvent) => {
+              const checked = e.target.checked;
+              setIncludeText(checked);
+              if (selectedId) {
+                void loadDetail(selectedId, checked);
+              }
+            }}
+          >
             查看分块全文
           </Checkbox>
         </Space>
@@ -201,9 +250,20 @@ export function DocumentsPanel({
             title={selected ? selected.filename : '文档详情'}
             className="app-sub-card list-pane-card"
             extra={selected ? (
-              <Popconfirm title="确认删除该文档？" onConfirm={removeDoc} okButtonProps={{ danger: true }}>
-                <Button danger size="small">删除文档</Button>
-              </Popconfirm>
+              <Space>
+                <Button size="small" icon={<EyeOutlined />} onClick={openPreviewPage}>全文预览</Button>
+                <Button
+                  size="small"
+                  icon={<FilePdfOutlined />}
+                  onClick={openPdfPreviewPage}
+                  disabled={!String(selected.filename || '').toLowerCase().endsWith('.pdf')}
+                >
+                  PDF全屏预览
+                </Button>
+                <Popconfirm title="确认删除该文档？" onConfirm={removeDoc} okButtonProps={{ danger: true }}>
+                  <Button danger size="small">删除文档</Button>
+                </Popconfirm>
+              </Space>
             ) : null}
           >
             {!selected ? (
@@ -232,6 +292,9 @@ export function DocumentsPanel({
                               <Space>
                                 <Typography.Text code>{chunk.chunk_id}</Typography.Text>
                                 <Typography.Text type="secondary">{chunk.char_count} chars</Typography.Text>
+                                {typeof chunk.line_start === 'number' && typeof chunk.line_end === 'number' ? (
+                                  <Typography.Text type="secondary">L{chunk.line_start}-L{chunk.line_end}</Typography.Text>
+                                ) : null}
                               </Space>
                             }
                             description={includeText ? chunk.text : chunk.text_preview}
@@ -241,6 +304,55 @@ export function DocumentsPanel({
                     />
                   )}
                 </Card>
+                {includeText ? (
+                  <Card size="small" title={`全文预览 (${chunkData?.total_lines ?? chunkData?.full_text_lines?.length ?? 0} 行)`}>
+                    {(chunkData?.full_text_lines ?? []).length === 0 ? (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可预览全文" />
+                    ) : (
+                      <Row gutter={12}>
+                        <Col xs={24} lg={8}>
+                          <div className="catalog-scroll">
+                            <List
+                              size="small"
+                              dataSource={chunkData?.catalog ?? []}
+                              renderItem={(catalog) => (
+                                <List.Item
+                                  className={`catalog-item ${activeCatalogId === catalog.id ? 'active' : ''}`}
+                                  onClick={() => jumpToLine(catalog.line_no, catalog.id)}
+                                  style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
+                                >
+                                  <div className="catalog-row">
+                                    <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                                    <Typography.Text type="secondary" className="catalog-line-no">L{catalog.line_no}</Typography.Text>
+                                  </div>
+                                </List.Item>
+                              )}
+                            />
+                          </div>
+                        </Col>
+                        <Col xs={24} lg={16}>
+                          <div className="full-preview-scroll">
+                            {(chunkData?.full_text_lines ?? []).map((line, index) => {
+                              const lineNo = index + 1;
+                              return (
+                                <div
+                                  key={lineNo}
+                                  ref={(el) => {
+                                    previewLineRefs.current[lineNo] = el;
+                                  }}
+                                  className={`full-preview-line ${activeLineNo === lineNo ? 'active' : ''}`}
+                                >
+                                  <Typography.Text className="full-preview-line-no">{lineNo}</Typography.Text>
+                                  <Typography.Text className="full-preview-line-text">{line || ' '}</Typography.Text>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </Col>
+                      </Row>
+                    )}
+                  </Card>
+                ) : null}
                 <Space size={16} wrap>
                   <Typography.Text type="secondary">doc_id: {selected.doc_id}</Typography.Text>
                   <Typography.Text type="secondary">上传时间: {selected.upload_time}</Typography.Text>

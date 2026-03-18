@@ -4,6 +4,8 @@ import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { getDocumentStats, getInfo, listDocuments } from './api/rag';
+import { DocumentPdfPreviewPage } from './components/DocumentPdfPreviewPage';
+import { DocumentPreviewPage } from './components/DocumentPreviewPage';
 import { DocumentsPanel } from './components/DocumentsPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { SystemPanel } from './components/SystemPanel';
@@ -69,6 +71,25 @@ export default function App() {
   const onMenuClick: MenuProps['onClick'] = (event: any) => {
     navigate(`/${String(event.key)}`);
   };
+
+  if (location.pathname.startsWith('/documents/preview/')) {
+    return (
+      <Routes>
+        <Route path="/documents/preview/:docId" element={<DocumentPreviewPage />} />
+        <Route path="*" element={<Navigate to="/documents" replace />} />
+      </Routes>
+    );
+  }
+
+  if (location.pathname.startsWith('/documents/pdf-preview')) {
+    return (
+      <Routes>
+        <Route path="/documents/pdf-preview-by-filename/:filename" element={<DocumentPdfPreviewPage />} />
+        <Route path="/documents/pdf-preview/:docId" element={<DocumentPdfPreviewPage />} />
+        <Route path="*" element={<Navigate to="/documents" replace />} />
+      </Routes>
+    );
+  }
 
   return (
     <Layout className="antd-shell">
