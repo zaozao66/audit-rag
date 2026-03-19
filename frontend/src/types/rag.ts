@@ -19,6 +19,13 @@ export interface UploadResponse {
   chunker_used: string;
 }
 
+export interface RegulationGroupOptions {
+  enabled?: boolean;
+  groupId?: string;
+  groupName?: string;
+  versionLabel?: string;
+}
+
 export interface SearchResultItem {
   score: number;
   original_score?: number;
@@ -137,12 +144,79 @@ export interface DocumentRecord {
   status: 'active' | 'deleted';
   version: number;
   tags: string[];
+  regulation_group_id: string;
+  regulation_group_name: string;
+  version_label: string;
 }
 
 export interface ListDocumentsResponse {
   success: boolean;
   count: number;
   documents: DocumentRecord[];
+}
+
+export interface RegulationGroupItem {
+  group_id: string;
+  group_name: string;
+  version_count: number;
+  latest_upload_time: string;
+  latest_doc_id: string;
+  latest_filename: string;
+}
+
+export interface RegulationGroupsResponse {
+  success: boolean;
+  count: number;
+  groups: RegulationGroupItem[];
+}
+
+export interface RegulationGroupVersionsResponse {
+  success: boolean;
+  group_id: string;
+  count: number;
+  versions: DocumentRecord[];
+}
+
+export interface RegulationCompareItem {
+  article_key: string;
+  article_no: string;
+  article_number?: number;
+  status: 'added' | 'removed' | 'modified' | 'unchanged';
+  old_text: string;
+  new_text: string;
+  old_page_nos: number[];
+  new_page_nos: number[];
+  old_chunk_ids: string[];
+  new_chunk_ids: string[];
+  metrics?: {
+    similarity: number;
+    added_chars: number;
+    removed_chars: number;
+    replaced_chars: number;
+  } | null;
+}
+
+export interface RegulationCompareResult {
+  left_document: DocumentRecord;
+  right_document: DocumentRecord;
+  summary: {
+    added: number;
+    removed: number;
+    modified: number;
+    unchanged: number;
+    total_articles: number;
+  };
+  diffs: RegulationCompareItem[];
+  filtered_count: number;
+  returned_count: number;
+  truncated: boolean;
+  include_unchanged: boolean;
+  keyword: string;
+}
+
+export interface RegulationCompareResponse {
+  success: boolean;
+  data: RegulationCompareResult;
 }
 
 export interface DocumentChunkItem {
@@ -198,6 +272,9 @@ export interface DocumentDetailData {
   status: 'active' | 'deleted';
   version: number;
   tags: string[];
+  regulation_group_id: string;
+  regulation_group_name: string;
+  version_label: string;
 }
 
 export interface DocumentDetailResponse {

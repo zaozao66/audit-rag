@@ -9,6 +9,18 @@ from src.api.services.rag_service import RAGService
 documents_bp = Blueprint('documents', __name__)
 
 
+def _to_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    return default
+
+
 @documents_bp.route('/documents', methods=['GET'])
 def list_documents():
     try:
@@ -27,6 +39,92 @@ def list_documents():
         })
     except Exception as e:
         current_app.logger.error("获取文档列表失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@documents_bp.route('/regulation-groups', methods=['GET'])
+def list_regulation_groups():
+    try:
+        keyword = request.args.get('keyword')
+        include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
+
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        groups = rag_processor.list_regulation_groups(keyword=keyword, include_deleted=include_deleted)
+        return jsonify({
+            "success": True,
+            "count": len(groups),
+            "groups": groups,
+        })
+    except Exception as e:
+        current_app.logger.error("获取制度分组失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@documents_bp.route('/regulation-groups/<group_id>/versions', methods=['GET'])
+def list_regulation_group_versions(group_id):
+    try:
+        include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
+
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        versions = rag_processor.list_regulation_versions(group_id=group_id, include_deleted=include_deleted)
+        return jsonify({
+            "success": True,
+            "group_id": group_id,
+            "count": len(versions),
+            "versions": versions,
+        })
+    except Exception as e:
+        current_app.logger.error("获取制度版本列表失败: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@documents_bp.route('/regulation-compare', methods=['POST'])
+def compare_regulation_versions():
+    try:
+        data = request.get_json(silent=True) or {}
+        left_doc_id = str(data.get('left_doc_id', '') or data.get('doc_id_a', '') or '').strip()
+        right_doc_id = str(data.get('right_doc_id', '') or data.get('doc_id_b', '') or '').strip()
+        group_id = str(data.get('group_id', '') or '').strip()
+        include_unchanged = _to_bool(data.get('include_unchanged', False), default=False)
+        keyword = str(data.get('keyword', '') or '').strip()
+        try:
+            limit = int(data.get('limit', 500))
+        except (TypeError, ValueError):
+            limit = 500
+
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = service.get_processor()
+
+        # 支持仅传 group_id 自动比较最新两个版本（最新 vs 次新）
+        if group_id and (not left_doc_id or not right_doc_id):
+            versions = rag_processor.list_regulation_versions(group_id=group_id, include_deleted=False)
+            if len(versions) < 2:
+                return jsonify({"error": "该制度组历史版本不足2个，无法对比"}), 400
+            right_doc_id = right_doc_id or str(versions[0].get('doc_id', '') or '').strip()
+            left_doc_id = left_doc_id or str(versions[1].get('doc_id', '') or '').strip()
+
+        if not left_doc_id or not right_doc_id:
+            return jsonify({"error": "缺少left_doc_id/right_doc_id"}), 400
+
+        result = rag_processor.compare_regulation_versions(
+            left_doc_id=left_doc_id,
+            right_doc_id=right_doc_id,
+            include_unchanged=include_unchanged,
+            keyword=keyword,
+            limit=limit,
+        )
+        return jsonify({
+            "success": True,
+            "data": result,
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        current_app.logger.error("制度版本对比失败: %s", e)
         return jsonify({"error": str(e)}), 500
 
 

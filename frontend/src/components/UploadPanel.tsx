@@ -2,9 +2,9 @@ import { InboxOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Form, Input, Radio, Select, Space, Typography, Upload } from 'antd';
 import type { UploadChangeParam, UploadFile } from 'antd/es/upload/interface';
 import type { ChangeEvent } from 'react';
-import { useState } from 'react';
-import { uploadArchive, uploadFiles } from '../api/rag';
-import type { UploadResponse } from '../types/rag';
+import { useEffect, useState } from 'react';
+import { listRegulationGroups, uploadArchive, uploadFiles } from '../api/rag';
+import type { RegulationGroupItem, UploadResponse } from '../types/rag';
 
 interface UploadPanelProps {
   onUploaded: () => void;
@@ -17,12 +17,42 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
   const [chunkerType, setChunkerType] = useState('smart');
   const [docType, setDocType] = useState('internal_regulation');
   const [title, setTitle] = useState('');
+  const [enableRegulationGroup, setEnableRegulationGroup] = useState(false);
+  const [groupMode, setGroupMode] = useState<'existing' | 'new'>('existing');
+  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [versionLabel, setVersionLabel] = useState('');
+  const [regulationGroups, setRegulationGroups] = useState<RegulationGroupItem[]>([]);
+  const [groupLoading, setGroupLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<UploadResponse | null>(null);
   const [error, setError] = useState('');
 
   const files = fileList.map((f) => f.originFileObj).filter(Boolean) as File[];
   const archiveFile = archiveList[0]?.originFileObj as File | undefined;
+  const isRegulationDocType = docType === 'internal_regulation' || docType === 'external_regulation';
+
+  useEffect(() => {
+    if (!isRegulationDocType) {
+      setEnableRegulationGroup(false);
+    }
+  }, [isRegulationDocType]);
+
+  useEffect(() => {
+    if (!enableRegulationGroup || !isRegulationDocType) return;
+    const loadGroups = async () => {
+      setGroupLoading(true);
+      try {
+        const res = await listRegulationGroups();
+        setRegulationGroups(res.groups || []);
+      } catch {
+        setRegulationGroups([]);
+      } finally {
+        setGroupLoading(false);
+      }
+    };
+    void loadGroups();
+  }, [enableRegulationGroup, isRegulationDocType]);
 
   const handleUpload = async () => {
     if (uploadMode === 'files' && files.length === 0) {
@@ -35,12 +65,31 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
       return;
     }
 
+    if (enableRegulationGroup && isRegulationDocType) {
+      if (groupMode === 'existing' && !selectedGroupId) {
+        setError('请选择要加入的制度组');
+        return;
+      }
+      if (groupMode === 'new' && !newGroupName.trim()) {
+        setError('请输入新制度组名称');
+        return;
+      }
+    }
+
     setLoading(true);
     setError('');
     try {
+      const regulationGroup = enableRegulationGroup && isRegulationDocType
+        ? {
+            enabled: true,
+            groupId: groupMode === 'existing' ? selectedGroupId : '',
+            groupName: groupMode === 'new' ? newGroupName : '',
+            versionLabel
+          }
+        : undefined;
       const data = uploadMode === 'files'
-        ? await uploadFiles({ files, chunkerType, docType, title })
-        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title });
+        ? await uploadFiles({ files, chunkerType, docType, title, regulationGroup })
+        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title, regulationGroup });
       setResult(data);
       onUploaded();
     } catch (err) {
@@ -123,6 +172,69 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
         <Form.Item label="标题（可选）">
           <Input value={title} onChange={(e: ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)} placeholder="如：2025年度内审报告" />
         </Form.Item>
+
+        <Form.Item label="制度版本管理">
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            <Radio.Group
+              value={enableRegulationGroup ? 'versioned' : 'normal'}
+              onChange={(event) => setEnableRegulationGroup(event.target.value === 'versioned')}
+              disabled={!isRegulationDocType}
+              options={[
+                { label: '普通上传（不进入版本组）', value: 'normal' },
+                { label: '同一制度版本上传', value: 'versioned' }
+              ]}
+            />
+            {!isRegulationDocType ? (
+              <Typography.Text type="secondary">仅 internal_regulation / external_regulation 支持版本分组</Typography.Text>
+            ) : null}
+          </Space>
+        </Form.Item>
+
+        {enableRegulationGroup && isRegulationDocType ? (
+          <>
+            <Form.Item label="制度组选择">
+              <Radio.Group
+                value={groupMode}
+                onChange={(event) => setGroupMode(event.target.value)}
+                options={[
+                  { label: '加入已有制度组', value: 'existing' },
+                  { label: '创建新制度组', value: 'new' }
+                ]}
+              />
+            </Form.Item>
+
+            {groupMode === 'existing' ? (
+              <Form.Item label="已有制度组">
+                <Select
+                  value={selectedGroupId || undefined}
+                  onChange={(value) => setSelectedGroupId(value)}
+                  loading={groupLoading}
+                  placeholder={groupLoading ? '加载中...' : '选择一个制度组'}
+                  options={regulationGroups.map((group) => ({
+                    value: group.group_id,
+                    label: `${group.group_name}（${group.version_count}个版本）`
+                  }))}
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item label="新制度组名称">
+                <Input
+                  value={newGroupName}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setNewGroupName(e.target.value)}
+                  placeholder="如：中国共产党纪律处分条例"
+                />
+              </Form.Item>
+            )}
+
+            <Form.Item label="版本标签（可选）">
+              <Input
+                value={versionLabel}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setVersionLabel(e.target.value)}
+                placeholder="如：2023版"
+              />
+            </Form.Item>
+          </>
+        ) : null}
 
         <Space>
           <Button type="primary" loading={loading} onClick={handleUpload}>{loading ? '上传处理中...' : '开始上传'}</Button>

@@ -7,6 +7,7 @@ import { getDocumentStats, getInfo, listDocuments } from './api/rag';
 import { DocumentPdfPreviewPage } from './components/DocumentPdfPreviewPage';
 import { DocumentPreviewPage } from './components/DocumentPreviewPage';
 import { DocumentsPanel } from './components/DocumentsPanel';
+import { RegulationComparePage } from './components/RegulationComparePage';
 import { SearchPanel } from './components/SearchPanel';
 import { SystemPanel } from './components/SystemPanel';
 import { UploadPanel } from './components/UploadPanel';
@@ -86,6 +87,15 @@ export default function App() {
       <Routes>
         <Route path="/documents/pdf-preview-by-filename/:filename" element={<DocumentPdfPreviewPage />} />
         <Route path="/documents/pdf-preview/:docId" element={<DocumentPdfPreviewPage />} />
+        <Route path="*" element={<Navigate to="/documents" replace />} />
+      </Routes>
+    );
+  }
+
+  if (location.pathname.startsWith('/documents/compare/')) {
+    return (
+      <Routes>
+        <Route path="/documents/compare/:groupId" element={<RegulationComparePage />} />
         <Route path="*" element={<Navigate to="/documents" replace />} />
       </Routes>
     );

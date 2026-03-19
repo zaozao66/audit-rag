@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+from difflib import SequenceMatcher
 from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -41,6 +42,7 @@ RECTIFICATION_STATUS_LABELS = {
 }
 EVIDENCE_NODE_TYPES = {ontology.ENTITY_CHUNK, ontology.ENTITY_DOCUMENT}
 EMBEDDING_INPUT_MAX_CHARS = 8192
+REGULATION_DOC_TYPES = {"internal_regulation", "external_regulation"}
 
 
 class RAGProcessor:
@@ -197,6 +199,273 @@ class RAGProcessor:
     def _calculate_content_hash(self, content: str) -> str:
         return hashlib.md5(content.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _extract_regulation_name_from_filename(filename: str) -> str:
+        base_name = os.path.splitext(str(filename or "").strip())[0]
+        if not base_name:
+            return ""
+
+        # 去掉常见版本后缀：例如 "（2023）"、"(2018版)"
+        normalized = re.sub(r"[（(]\s*\d{4}[^）)]*[）)]\s*$", "", base_name).strip()
+        return normalized or base_name
+
+    @staticmethod
+    def _extract_version_label_from_filename(filename: str) -> str:
+        base_name = os.path.splitext(str(filename or "").strip())[0]
+        if not base_name:
+            return ""
+        match = re.search(r"[（(]\s*([^（）()]{2,30})\s*[）)]\s*$", base_name)
+        if not match:
+            return ""
+        return str(match.group(1) or "").strip()
+
+    @staticmethod
+    def _build_regulation_group_id(group_name: str) -> str:
+        normalized = re.sub(r"\s+", "", str(group_name or "")).strip().lower()
+        if not normalized:
+            normalized = "unknown_regulation_group"
+        digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:12]
+        return f"reg_{digest}"
+
+    @staticmethod
+    def _to_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    def _resolve_regulation_group_meta(self, doc: Dict[str, Any]) -> Tuple[str, str, str]:
+        doc_type = str(doc.get("doc_type", "") or "").strip()
+        if doc_type not in REGULATION_DOC_TYPES:
+            return "", "", ""
+
+        enabled = self._to_bool(doc.get("enable_regulation_group", False))
+        if not enabled:
+            return "", "", ""
+
+        group_id = str(doc.get("regulation_group_id", "") or "").strip()
+        group_name = str(doc.get("regulation_group_name", "") or "").strip()
+        version_label = str(doc.get("version_label", "") or "").strip()
+
+        if group_id and not group_name:
+            for record in self.metadata_store.documents.values():
+                if str(record.regulation_group_id or "").strip() == group_id:
+                    group_name = str(record.regulation_group_name or "").strip()
+                    if group_name:
+                        break
+
+        if group_name and not group_id:
+            group_id = self._build_regulation_group_id(group_name)
+
+        if not group_name and group_id:
+            group_name = group_id
+
+        if not group_name and not group_id:
+            inferred_name = self._extract_regulation_name_from_filename(str(doc.get("filename", "") or ""))
+            if inferred_name:
+                group_name = inferred_name
+                group_id = self._build_regulation_group_id(group_name)
+
+        if not version_label:
+            version_label = self._extract_version_label_from_filename(str(doc.get("filename", "") or ""))
+
+        return group_id, group_name, version_label
+
+    def _backfill_regulation_groups_if_needed(self) -> None:
+        changed = False
+        for record in self.metadata_store.documents.values():
+            doc_type = str(record.doc_type or "").strip()
+            if doc_type not in REGULATION_DOC_TYPES:
+                continue
+
+            if not str(record.regulation_group_id or "").strip():
+                inferred_name = self._extract_regulation_name_from_filename(record.filename)
+                if inferred_name:
+                    record.regulation_group_name = inferred_name
+                    record.regulation_group_id = self._build_regulation_group_id(inferred_name)
+                    changed = True
+
+            if not str(record.version_label or "").strip():
+                inferred_version = self._extract_version_label_from_filename(record.filename)
+                if inferred_version:
+                    record.version_label = inferred_version
+                    changed = True
+
+        if changed:
+            self.metadata_store.save()
+
+    @staticmethod
+    def _chinese_numeral_to_int(raw: str) -> Optional[int]:
+        token = str(raw or "").strip()
+        if not token:
+            return None
+        if token.isdigit():
+            return int(token)
+
+        digit_map = {
+            "零": 0,
+            "〇": 0,
+            "一": 1,
+            "二": 2,
+            "两": 2,
+            "三": 3,
+            "四": 4,
+            "五": 5,
+            "六": 6,
+            "七": 7,
+            "八": 8,
+            "九": 9,
+        }
+        unit_map = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+
+        if all(ch in digit_map for ch in token):
+            return int("".join(str(digit_map[ch]) for ch in token))
+
+        total = 0
+        section = 0
+        number = 0
+        seen = False
+        for ch in token:
+            if ch in digit_map:
+                number = digit_map[ch]
+                seen = True
+                continue
+            if ch in unit_map:
+                seen = True
+                unit = unit_map[ch]
+                if unit == 10000:
+                    section = (section + number) * unit
+                    total += section
+                    section = 0
+                    number = 0
+                else:
+                    if number == 0:
+                        number = 1
+                    section += number * unit
+                    number = 0
+                continue
+            return None
+
+        if not seen:
+            return None
+        return total + section + number
+
+    @classmethod
+    def _extract_article_no(cls, text: str) -> Tuple[str, Optional[int]]:
+        source = str(text or "").strip()
+        if not source:
+            return "", None
+
+        match = re.search(r"第\s*([一二三四五六七八九十百千万零〇两\d]+)\s*条", source)
+        if not match:
+            return "", None
+        token = str(match.group(1) or "").strip()
+        article_no = f"第{token}条"
+        article_number = cls._chinese_numeral_to_int(token)
+        return article_no, article_number
+
+    @staticmethod
+    def _normalize_compare_text(text: str) -> str:
+        return re.sub(r"\s+", "", str(text or "")).strip()
+
+    @classmethod
+    def _build_text_change_metrics(cls, old_text: str, new_text: str) -> Dict[str, Any]:
+        old_norm = cls._normalize_compare_text(old_text)
+        new_norm = cls._normalize_compare_text(new_text)
+        matcher = SequenceMatcher(None, old_norm, new_norm)
+
+        added = 0
+        removed = 0
+        replaced = 0
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "insert":
+                added += (j2 - j1)
+            elif tag == "delete":
+                removed += (i2 - i1)
+            elif tag == "replace":
+                replaced += max(i2 - i1, j2 - j1)
+
+        return {
+            "similarity": round(float(matcher.ratio()), 4),
+            "added_chars": int(added),
+            "removed_chars": int(removed),
+            "replaced_chars": int(replaced),
+        }
+
+    def _build_article_entries_from_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        ordered_chunks = sorted(
+            chunks or [],
+            key=lambda c: (
+                int(c.get("chunk_index", 0) or 0),
+                int(c.get("global_index", 0) or 0),
+            ),
+        )
+
+        entries: Dict[str, Dict[str, Any]] = {}
+        for idx, chunk in enumerate(ordered_chunks):
+            text = str(chunk.get("text", "") or "")
+            metadata = chunk.get("metadata", {}) or {}
+            header = str(metadata.get("header", "") or chunk.get("header", "") or "")
+            first_line = str(text.splitlines()[0] if text else "")
+
+            article_no, article_number = self._extract_article_no(header)
+            if not article_no:
+                article_no, article_number = self._extract_article_no(first_line)
+
+            if article_number is not None:
+                article_key = f"article:{article_number:05d}"
+            elif article_no:
+                article_key = f"article_label:{article_no}"
+            else:
+                chunk_id = str(chunk.get("chunk_id", "") or f"chunk_{idx}")
+                fallback_header = header or first_line or chunk_id
+                normalized_fallback = self._normalize_compare_text(fallback_header)[:48]
+                article_key = f"section:{normalized_fallback}" if normalized_fallback else f"chunk:{chunk_id}"
+
+            payload = entries.setdefault(
+                article_key,
+                {
+                    "article_key": article_key,
+                    "article_no": article_no,
+                    "article_number": article_number,
+                    "texts": [],
+                    "page_nos": [],
+                    "chunk_ids": [],
+                    "order": idx,
+                },
+            )
+
+            if article_no and not payload.get("article_no"):
+                payload["article_no"] = article_no
+            if article_number is not None and payload.get("article_number") is None:
+                payload["article_number"] = article_number
+            payload["order"] = min(int(payload.get("order", idx) or idx), idx)
+
+            if text:
+                payload["texts"].append(text)
+
+            chunk_id = str(chunk.get("chunk_id", "") or "")
+            if chunk_id:
+                payload["chunk_ids"].append(chunk_id)
+
+            page_nos = metadata.get("page_nos", []) or []
+            for p in page_nos:
+                try:
+                    page_no = int(p)
+                except (TypeError, ValueError):
+                    continue
+                if page_no not in payload["page_nos"]:
+                    payload["page_nos"].append(page_no)
+
+        for item in entries.values():
+            item["page_nos"] = sorted(item.get("page_nos", []))
+            item["chunk_ids"] = list(dict.fromkeys(item.get("chunk_ids", [])))
+            item["text"] = "\n\n".join(t for t in item.get("texts", []) if t).strip()
+            item.pop("texts", None)
+
+        return entries
+
     def _extract_page_nos_and_clean_text(self, text: str) -> Tuple[str, List[int]]:
         page_numbers = [int(m.group(1)) for m in PAGE_PATTERN.finditer(text or "")]
         unique_pages = sorted(set(page_numbers))
@@ -317,6 +586,7 @@ class RAGProcessor:
             content = doc["text"]
             content_hash = self._calculate_content_hash(content)
             doc_id = content_hash[:16]
+            group_id, group_name, version_label = self._resolve_regulation_group_meta(doc)
 
             existing = self.metadata_store.get_document(doc_id)
             if existing and existing.status == "active":
@@ -331,7 +601,18 @@ class RAGProcessor:
                     )
                     if persisted:
                         existing.file_path = persisted
-                        self.metadata_store.save()
+                metadata_changed = False
+                if group_id and existing.regulation_group_id != group_id:
+                    existing.regulation_group_id = group_id
+                    metadata_changed = True
+                if group_name and existing.regulation_group_name != group_name:
+                    existing.regulation_group_name = group_name
+                    metadata_changed = True
+                if version_label and existing.version_label != version_label:
+                    existing.version_label = version_label
+                    metadata_changed = True
+                if metadata_changed:
+                    self.metadata_store.save()
                 logger.info("文档已存在，跳过: %s", doc.get("filename", "unknown"))
                 skipped_count += 1
                 continue
@@ -351,6 +632,9 @@ class RAGProcessor:
                 "content": content,
                 "content_hash": content_hash,
                 "chunks": chunks,
+                "group_id": group_id,
+                "group_name": group_name,
+                "version_label": version_label,
             })
 
         if pending_entries:
@@ -387,6 +671,9 @@ class RAGProcessor:
                     doc_type=doc.get("doc_type", "unknown"),
                     upload_time=datetime.now().isoformat(),
                     chunk_count=len(entry["chunks"]),
+                    regulation_group_id=str(entry.get("group_id", "") or ""),
+                    regulation_group_name=str(entry.get("group_name", "") or ""),
+                    version_label=str(entry.get("version_label", "") or ""),
                 )
 
                 is_new = self.metadata_store.add_document(record, save=False)
@@ -1773,6 +2060,7 @@ class RAGProcessor:
         title: str = None,
         original_filenames: List[str] = None,
         error_collector: Optional[List[Dict[str, str]]] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         from src.ingestion.parsers.document_processor import process_uploaded_documents
 
@@ -1782,15 +2070,190 @@ class RAGProcessor:
             title=title,
             original_filenames=original_filenames,
             error_collector=error_collector,
+            extra_metadata=extra_metadata,
         )
         if not processed_documents:
             return {"processed": 0, "skipped": 0, "updated": 0, "total_chunks": 0}
         return self.process_documents(processed_documents, save_after_processing=save_after_processing)
 
     def list_documents(self, doc_type: str = None, keyword: str = None, include_deleted: bool = False) -> List[Dict]:
+        self._backfill_regulation_groups_if_needed()
         status = None if include_deleted else "active"
         records = self.metadata_store.list_documents(doc_type=doc_type, status=status, keyword=keyword)
         return [r.to_dict() for r in records]
+
+    def list_regulation_groups(self, keyword: str = None, include_deleted: bool = False) -> List[Dict[str, Any]]:
+        self._backfill_regulation_groups_if_needed()
+        status = None if include_deleted else "active"
+        records = self.metadata_store.list_documents(status=status)
+        lowered_keyword = str(keyword or "").strip().lower()
+
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for record in records:
+            group_id = str(record.regulation_group_id or "").strip()
+            if not group_id:
+                continue
+
+            group_name = str(record.regulation_group_name or "").strip() or group_id
+            if lowered_keyword and lowered_keyword not in group_name.lower():
+                continue
+
+            payload = grouped.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "version_count": 0,
+                    "latest_upload_time": "",
+                    "latest_doc_id": "",
+                    "latest_filename": "",
+                },
+            )
+            payload["version_count"] += 1
+            upload_time = str(record.upload_time or "")
+            if upload_time >= str(payload.get("latest_upload_time", "")):
+                payload["latest_upload_time"] = upload_time
+                payload["latest_doc_id"] = record.doc_id
+                payload["latest_filename"] = record.filename
+
+        groups = list(grouped.values())
+        groups.sort(key=lambda x: str(x.get("latest_upload_time", "")), reverse=True)
+        return groups
+
+    def list_regulation_versions(self, group_id: str, include_deleted: bool = False) -> List[Dict[str, Any]]:
+        self._backfill_regulation_groups_if_needed()
+        target_group_id = str(group_id or "").strip()
+        if not target_group_id:
+            return []
+
+        status = None if include_deleted else "active"
+        records = self.metadata_store.list_documents(status=status)
+        matched = [
+            r.to_dict()
+            for r in records
+            if str(r.regulation_group_id or "").strip() == target_group_id
+        ]
+        matched.sort(key=lambda x: str(x.get("upload_time", "")), reverse=True)
+        return matched
+
+    def compare_regulation_versions(
+        self,
+        left_doc_id: str,
+        right_doc_id: str,
+        include_unchanged: bool = False,
+        keyword: str = "",
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        self._backfill_regulation_groups_if_needed()
+
+        left_id = str(left_doc_id or "").strip()
+        right_id = str(right_doc_id or "").strip()
+        if not left_id or not right_id:
+            raise ValueError("缺少对比文档ID")
+        if left_id == right_id:
+            raise ValueError("请提供两个不同版本进行对比")
+
+        left_record = self.metadata_store.get_document(left_id)
+        right_record = self.metadata_store.get_document(right_id)
+        if not left_record or left_record.status != "active":
+            raise ValueError("左侧文档不存在或已删除")
+        if not right_record or right_record.status != "active":
+            raise ValueError("右侧文档不存在或已删除")
+
+        if not self.vector_store:
+            self.load_vector_store(self.vector_store_path)
+        if not self.vector_store:
+            raise ValueError("向量库未加载")
+
+        left_chunks = self.vector_store.get_document_chunks(left_id)
+        right_chunks = self.vector_store.get_document_chunks(right_id)
+        if not left_chunks:
+            raise ValueError("左侧文档没有可对比的分块")
+        if not right_chunks:
+            raise ValueError("右侧文档没有可对比的分块")
+
+        left_entries = self._build_article_entries_from_chunks(left_chunks)
+        right_entries = self._build_article_entries_from_chunks(right_chunks)
+        all_keys = list(set(left_entries.keys()) | set(right_entries.keys()))
+
+        def _entry_sort_key(key: str) -> Tuple[int, int, str]:
+            candidate = right_entries.get(key) or left_entries.get(key) or {}
+            article_number = candidate.get("article_number")
+            order = int(candidate.get("order", 999999) or 999999)
+            if isinstance(article_number, int):
+                return (0, article_number, key)
+            return (1, order, key)
+
+        sorted_keys = sorted(all_keys, key=_entry_sort_key)
+        lowered_keyword = str(keyword or "").strip().lower()
+
+        summary = {
+            "added": 0,
+            "removed": 0,
+            "modified": 0,
+            "unchanged": 0,
+            "total_articles": len(sorted_keys),
+        }
+
+        filtered_items: List[Dict[str, Any]] = []
+        for key in sorted_keys:
+            left_item = left_entries.get(key)
+            right_item = right_entries.get(key)
+            left_text = str((left_item or {}).get("text", "") or "")
+            right_text = str((right_item or {}).get("text", "") or "")
+
+            if left_item and right_item:
+                left_norm = self._normalize_compare_text(left_text)
+                right_norm = self._normalize_compare_text(right_text)
+                status = "unchanged" if left_norm == right_norm else "modified"
+            elif left_item:
+                status = "removed"
+            else:
+                status = "added"
+
+            summary[status] += 1
+
+            if status == "unchanged" and not include_unchanged:
+                continue
+
+            article_no = str((right_item or {}).get("article_no", "") or (left_item or {}).get("article_no", "") or key)
+            if lowered_keyword:
+                haystack = (article_no + left_text + right_text).lower()
+                if lowered_keyword not in haystack:
+                    continue
+
+            metrics = self._build_text_change_metrics(left_text, right_text) if left_item and right_item else None
+            filtered_items.append(
+                {
+                    "article_key": key,
+                    "article_no": article_no,
+                    "article_number": (right_item or {}).get("article_number", (left_item or {}).get("article_number")),
+                    "status": status,
+                    "old_text": left_text,
+                    "new_text": right_text,
+                    "old_page_nos": (left_item or {}).get("page_nos", []),
+                    "new_page_nos": (right_item or {}).get("page_nos", []),
+                    "old_chunk_ids": (left_item or {}).get("chunk_ids", []),
+                    "new_chunk_ids": (right_item or {}).get("chunk_ids", []),
+                    "metrics": metrics,
+                }
+            )
+
+        safe_limit = max(1, min(2000, int(limit or 500)))
+        truncated = len(filtered_items) > safe_limit
+        diffs = filtered_items[:safe_limit] if truncated else filtered_items
+
+        return {
+            "left_document": left_record.to_dict(),
+            "right_document": right_record.to_dict(),
+            "summary": summary,
+            "diffs": diffs,
+            "filtered_count": len(filtered_items),
+            "returned_count": len(diffs),
+            "truncated": truncated,
+            "include_unchanged": bool(include_unchanged),
+            "keyword": lowered_keyword,
+        }
 
     def get_document_id_by_filename(self, filename: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         target_name = str(filename or "").strip()
@@ -1840,6 +2303,7 @@ class RAGProcessor:
         return self.get_document_detail(exact[0].doc_id)
 
     def get_document_detail(self, doc_id: str) -> Optional[Dict]:
+        self._backfill_regulation_groups_if_needed()
         record = self.metadata_store.get_document(doc_id)
         if not record:
             return None

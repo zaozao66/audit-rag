@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from docx import Document
 import pdfplumber
 import chardet
@@ -182,6 +182,7 @@ def process_uploaded_documents(
     title: str = None,
     original_filenames: List[str] = None,
     error_collector: List[Dict[str, str]] = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     处理用户上传的多个文档
@@ -220,6 +221,9 @@ def process_uploaded_documents(
                 'text': content,
                 'char_count': len(content)
             }
+
+            if extra_metadata:
+                doc_obj.update({k: v for k, v in extra_metadata.items() if v is not None})
             
             documents.append(doc_obj)
             logger.info(f"文档 {filename} 处理完成，字符数: {len(content)}, 类型: {doc_type}")

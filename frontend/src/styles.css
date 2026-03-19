@@ -292,6 +292,45 @@ body {
   padding: 2px 7px;
 }
 
+.compare-main-row .ant-col {
+  display: flex;
+}
+
+.compare-catalog-scroll {
+  max-height: calc(100vh - 280px);
+}
+
+.compare-pane-card {
+  width: 100%;
+}
+
+.compare-pane-scroll {
+  max-height: calc(100vh - 280px);
+  overflow: auto;
+  border: 1px solid #edf1f7;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+.compare-entry {
+  border: 1px solid #eef2f8;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.compare-entry:hover {
+  background: #fafcff;
+}
+
+.compare-entry.active {
+  border-color: #ffbb96;
+  background: #fff7e8;
+}
+
 @keyframes pdf-line-pulse {
   0% {
     transform: translateY(-6px) scale(0.995);

@@ -8,6 +8,7 @@ import {
   Empty,
   Input,
   List,
+  Modal,
   Popconfirm,
   Row,
   Select,
@@ -18,7 +19,13 @@ import {
 import type { CheckboxChangeEvent } from 'antd/es/checkbox';
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { clearAllDocuments, deleteDocument, getDocumentChunks, getDocumentDetail } from '../api/rag';
+import {
+  clearAllDocuments,
+  deleteDocument,
+  getDocumentChunks,
+  getDocumentDetail,
+  listRegulationGroupVersions
+} from '../api/rag';
 import type { DocumentChunkItem, DocumentChunksData, DocumentRecord } from '../types/rag';
 
 interface DocumentsPanelProps {
@@ -53,6 +60,11 @@ export function DocumentsPanel({
   const [chunkPageSize, setChunkPageSize] = useState(10);
   const [activeCatalogId, setActiveCatalogId] = useState('');
   const [activeLineNo, setActiveLineNo] = useState<number | null>(null);
+  const [historyVisible, setHistoryVisible] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState<DocumentRecord[]>([]);
+  const [compareCheckLoading, setCompareCheckLoading] = useState(false);
+  const [compareVersionCount, setCompareVersionCount] = useState<number>(0);
   const previewLineRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const selected = useMemo(() => documents.find((item) => item.doc_id === selectedId) ?? null, [documents, selectedId]);
@@ -145,6 +157,64 @@ export function DocumentsPanel({
     window.open(previewUrl, '_blank', 'noopener,noreferrer');
   };
 
+  const openVersionHistory = async () => {
+    if (!selected?.regulation_group_id) return;
+    setHistoryLoading(true);
+    setError('');
+    try {
+      const result = await listRegulationGroupVersions(selected.regulation_group_id, includeDeleted);
+      setHistoryVersions(result.versions || []);
+      setHistoryVisible(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载历史版本失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const groupId = String(selected?.regulation_group_id || '').trim();
+    if (!groupId) {
+      setCompareVersionCount(0);
+      setCompareCheckLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const checkVersions = async () => {
+      setCompareCheckLoading(true);
+      try {
+        const result = await listRegulationGroupVersions(groupId, false);
+        if (!cancelled) {
+          setCompareVersionCount(Array.isArray(result.versions) ? result.versions.length : 0);
+        }
+      } catch {
+        if (!cancelled) {
+          setCompareVersionCount(0);
+        }
+      } finally {
+        if (!cancelled) {
+          setCompareCheckLoading(false);
+        }
+      }
+    };
+
+    void checkVersions();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.regulation_group_id]);
+
+  const openComparePage = () => {
+    if (!selected?.regulation_group_id) return;
+    const search = new URLSearchParams();
+    search.set('right', selected.doc_id);
+    const compareUrl = `${window.location.origin}${window.location.pathname}#/documents/compare/${encodeURIComponent(selected.regulation_group_id)}?${search.toString()}`;
+    window.open(compareUrl, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <Card
       title="文档管理"
@@ -234,6 +304,8 @@ export function DocumentsPanel({
                           <Tag>{doc.doc_type}</Tag>
                           <Typography.Text type="secondary">{doc.chunk_count} chunks</Typography.Text>
                           <Tag color={doc.status === 'active' ? 'green' : 'default'}>{doc.status}</Tag>
+                          {doc.regulation_group_name ? <Tag color="blue">{doc.regulation_group_name}</Tag> : null}
+                          {doc.version_label ? <Tag color="purple">{doc.version_label}</Tag> : null}
                         </Space>
                       )}
                     />
@@ -259,6 +331,25 @@ export function DocumentsPanel({
                   disabled={!String(selected.filename || '').toLowerCase().endsWith('.pdf')}
                 >
                   PDF全屏预览
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    void openVersionHistory();
+                  }}
+                  disabled={!selected.regulation_group_id}
+                  loading={historyLoading}
+                >
+                  历史版本
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    openComparePage();
+                  }}
+                  disabled={!selected.regulation_group_id || compareCheckLoading || compareVersionCount < 2}
+                >
+                  版本对比
                 </Button>
                 <Popconfirm title="确认删除该文档？" onConfirm={removeDoc} okButtonProps={{ danger: true }}>
                   <Button danger size="small">删除文档</Button>
@@ -357,6 +448,12 @@ export function DocumentsPanel({
                   <Typography.Text type="secondary">doc_id: {selected.doc_id}</Typography.Text>
                   <Typography.Text type="secondary">上传时间: {selected.upload_time}</Typography.Text>
                   <Typography.Text type="secondary">版本: {selected.version}</Typography.Text>
+                  {selected.regulation_group_name ? (
+                    <Typography.Text type="secondary">制度组: {selected.regulation_group_name}</Typography.Text>
+                  ) : null}
+                  {selected.version_label ? (
+                    <Typography.Text type="secondary">版本标签: {selected.version_label}</Typography.Text>
+                  ) : null}
                   <Typography.Text type="secondary">文件大小: {selected.file_size} bytes</Typography.Text>
                 </Space>
               </Space>
@@ -364,6 +461,51 @@ export function DocumentsPanel({
           </Card>
         </Col>
       </Row>
+
+      <Modal
+        title={selected?.regulation_group_name ? `历史版本 - ${selected.regulation_group_name}` : '历史版本'}
+        open={historyVisible}
+        onCancel={() => setHistoryVisible(false)}
+        footer={null}
+        width={780}
+      >
+        {historyVersions.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前制度组暂无历史版本" />
+        ) : (
+          <List
+            dataSource={historyVersions}
+            renderItem={(item) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key={`open-${item.doc_id}`}
+                    type={item.doc_id === selectedId ? 'default' : 'link'}
+                    onClick={() => {
+                      void loadDetail(item.doc_id);
+                      setHistoryVisible(false);
+                    }}
+                  >
+                    {item.doc_id === selectedId ? '当前版本' : '查看'}
+                  </Button>
+                ]}
+              >
+                <List.Item.Meta
+                  title={item.filename}
+                  description={(
+                    <Space wrap size={8}>
+                      <Typography.Text type="secondary">{item.upload_time}</Typography.Text>
+                      <Tag color={item.status === 'active' ? 'green' : 'default'}>{item.status}</Tag>
+                      {item.version_label ? <Tag color="purple">{item.version_label}</Tag> : null}
+                      <Typography.Text type="secondary">{item.chunk_count} chunks</Typography.Text>
+                    </Space>
+                  )}
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Modal>
+
     </Card>
   );
 }

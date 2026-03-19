@@ -50,6 +50,11 @@ def _normalize_chunker_type(value: str) -> str:
     return chunker_type
 
 
+def _is_regulation_doc_type(doc_type: str) -> bool:
+    normalized = str(doc_type or "").strip().lower()
+    return normalized in {"internal_regulation", "external_regulation"}
+
+
 def _infer_catalog_level(semantic_boundary: str, header: str, section_path: List[str]) -> int:
     boundary = str(semantic_boundary or '').lower()
     normalized_header = str(header or '').strip()
@@ -448,7 +453,20 @@ def upload_and_store_documents():
                     temp_file_paths.append(temp_file.name)
 
             doc_type = request.form.get('doc_type', 'internal_regulation')
+            enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
+            regulation_group_id = str(request.form.get('regulation_group_id', '') or '').strip()
+            regulation_group_name = str(request.form.get('regulation_group_name', '') or '').strip()
+            version_label = str(request.form.get('version_label', '') or '').strip()
+            if enable_regulation_group and not _is_regulation_doc_type(doc_type):
+                return jsonify({"error": "只有制度类文档支持版本分组"}), 400
+
             title = request.form.get('title', None)
+            extra_metadata = {
+                "enable_regulation_group": enable_regulation_group,
+                "regulation_group_id": regulation_group_id,
+                "regulation_group_name": regulation_group_name,
+                "version_label": version_label,
+            }
 
             num_processed = rag_processor.process_documents_from_files(
                 temp_file_paths,
@@ -457,6 +475,7 @@ def upload_and_store_documents():
                 title=title,
                 original_filenames=original_filenames,
                 error_collector=parse_errors,
+                extra_metadata=extra_metadata,
             )
         finally:
             for temp_path in temp_file_paths:
@@ -516,7 +535,19 @@ def upload_archive_and_store_documents():
             rag_processor.vector_store_path = store_path
 
         doc_type = request.form.get('doc_type', 'internal_regulation')
+        enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
+        regulation_group_id = str(request.form.get('regulation_group_id', '') or '').strip()
+        regulation_group_name = str(request.form.get('regulation_group_name', '') or '').strip()
+        version_label = str(request.form.get('version_label', '') or '').strip()
+        if enable_regulation_group and not _is_regulation_doc_type(doc_type):
+            return jsonify({"error": "只有制度类文档支持版本分组"}), 400
         title = request.form.get('title', None)
+        extra_metadata = {
+            "enable_regulation_group": enable_regulation_group,
+            "regulation_group_id": regulation_group_id,
+            "regulation_group_name": regulation_group_name,
+            "version_label": version_label,
+        }
 
         temp_archive = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
         temp_archive_path = temp_archive.name
@@ -545,6 +576,7 @@ def upload_archive_and_store_documents():
                 title=title,
                 original_filenames=extraction.original_filenames,
                 error_collector=parse_errors,
+                extra_metadata=extra_metadata,
             )
             if not documents:
                 return jsonify({

@@ -27,13 +27,18 @@ class DocumentRecord:
     status: str = "active"         # active/deleted
     version: int = 1               # 版本号
     tags: List[str] = field(default_factory=list)  # 标签
+    regulation_group_id: str = ""  # 同一制度分组ID
+    regulation_group_name: str = ""  # 同一制度分组名称
+    version_label: str = ""  # 版本标签（如：2018版）
     
     def to_dict(self) -> Dict:
         return asdict(self)
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'DocumentRecord':
-        return cls(**data)
+        allowed_fields = set(cls.__dataclass_fields__.keys())
+        normalized = {k: v for k, v in (data or {}).items() if k in allowed_fields}
+        return cls(**normalized)
 
 
 class DocumentMetadataStore:

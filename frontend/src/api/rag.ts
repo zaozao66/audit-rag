@@ -8,6 +8,10 @@ import type {
   DocumentIdByFilenameResponse,
   InfoResponse,
   ListDocumentsResponse,
+  RegulationGroupOptions,
+  RegulationGroupsResponse,
+  RegulationGroupVersionsResponse,
+  RegulationCompareResponse,
   SearchWithIntentResponse,
   CitationItem,
   StreamCitationsEvent,
@@ -28,6 +32,7 @@ export function uploadFiles(payload: {
   docType: string;
   title?: string;
   saveAfterProcessing?: boolean;
+  regulationGroup?: RegulationGroupOptions;
 }) {
   const form = new FormData();
   payload.files.forEach((file) => form.append('files', file));
@@ -36,6 +41,18 @@ export function uploadFiles(payload: {
   form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
   if (payload.title?.trim()) {
     form.append('title', payload.title.trim());
+  }
+  if (payload.regulationGroup?.enabled) {
+    form.append('enable_regulation_group', 'true');
+    if (payload.regulationGroup.groupId?.trim()) {
+      form.append('regulation_group_id', payload.regulationGroup.groupId.trim());
+    }
+    if (payload.regulationGroup.groupName?.trim()) {
+      form.append('regulation_group_name', payload.regulationGroup.groupName.trim());
+    }
+    if (payload.regulationGroup.versionLabel?.trim()) {
+      form.append('version_label', payload.regulationGroup.versionLabel.trim());
+    }
   }
 
   return apiFetch<UploadResponse>('/upload_store', {
@@ -50,6 +67,7 @@ export function uploadArchive(payload: {
   docType: string;
   title?: string;
   saveAfterProcessing?: boolean;
+  regulationGroup?: RegulationGroupOptions;
 }) {
   const form = new FormData();
   form.append('archive', payload.archive);
@@ -58,6 +76,18 @@ export function uploadArchive(payload: {
   form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
   if (payload.title?.trim()) {
     form.append('title', payload.title.trim());
+  }
+  if (payload.regulationGroup?.enabled) {
+    form.append('enable_regulation_group', 'true');
+    if (payload.regulationGroup.groupId?.trim()) {
+      form.append('regulation_group_id', payload.regulationGroup.groupId.trim());
+    }
+    if (payload.regulationGroup.groupName?.trim()) {
+      form.append('regulation_group_name', payload.regulationGroup.groupName.trim());
+    }
+    if (payload.regulationGroup.versionLabel?.trim()) {
+      form.append('version_label', payload.regulationGroup.versionLabel.trim());
+    }
   }
 
   return apiFetch<UploadResponse>('/upload_archive_store', {
@@ -198,6 +228,43 @@ export function listDocuments(params: {
   const suffix = query.toString() ? `?${query.toString()}` : '';
 
   return apiFetch<ListDocumentsResponse>(`/documents${suffix}`);
+}
+
+export function listRegulationGroups(params?: { keyword?: string; includeDeleted?: boolean }) {
+  const query = new URLSearchParams();
+  if (params?.keyword?.trim()) query.set('keyword', params.keyword.trim());
+  query.set('include_deleted', String(Boolean(params?.includeDeleted)));
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return apiFetch<RegulationGroupsResponse>(`/regulation-groups${suffix}`);
+}
+
+export function listRegulationGroupVersions(groupId: string, includeDeleted = false) {
+  const query = new URLSearchParams({ include_deleted: String(includeDeleted) });
+  return apiFetch<RegulationGroupVersionsResponse>(
+    `/regulation-groups/${encodeURIComponent(groupId)}/versions?${query.toString()}`
+  );
+}
+
+export function compareRegulationVersions(payload: {
+  leftDocId?: string;
+  rightDocId?: string;
+  groupId?: string;
+  includeUnchanged?: boolean;
+  keyword?: string;
+  limit?: number;
+}) {
+  return apiFetch<RegulationCompareResponse>('/regulation-compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      left_doc_id: payload.leftDocId,
+      right_doc_id: payload.rightDocId,
+      group_id: payload.groupId,
+      include_unchanged: payload.includeUnchanged ?? false,
+      keyword: payload.keyword ?? '',
+      limit: payload.limit ?? 500
+    })
+  });
 }
 
 export function getDocumentDetail(docId: string) {
