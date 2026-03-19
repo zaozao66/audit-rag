@@ -140,8 +140,8 @@ export function DocumentsPanel({
   };
 
   const openPdfPreviewPage = () => {
-    if (!selectedId || !selected?.filename) return;
-    const previewUrl = `${window.location.origin}${window.location.pathname}#/documents/pdf-preview-by-filename/${encodeURIComponent(selected.filename)}`;
+    if (!selectedId) return;
+    const previewUrl = `${window.location.origin}${window.location.pathname}#/documents/pdf-preview/${encodeURIComponent(selectedId)}`;
     window.open(previewUrl, '_blank', 'noopener,noreferrer');
   };
 

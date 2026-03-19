@@ -5,6 +5,7 @@ import type {
   DeleteDocumentResponse,
   DocumentChunksResponse,
   DocumentDetailResponse,
+  DocumentIdByFilenameResponse,
   InfoResponse,
   ListDocumentsResponse,
   SearchWithIntentResponse,
@@ -206,6 +207,11 @@ export function getDocumentDetail(docId: string) {
 export function getDocumentDetailByFilename(filename: string) {
   const query = new URLSearchParams({ filename });
   return apiFetch<DocumentDetailResponse>(`/documents/by-filename?${query.toString()}`);
+}
+
+export function getDocumentIdByFilename(filename: string, includeDeleted = false) {
+  const query = new URLSearchParams({ filename, include_deleted: String(includeDeleted) });
+  return apiFetch<DocumentIdByFilenameResponse>(`/documents/id-by-filename?${query.toString()}`);
 }
 
 export function getDocumentChunks(docId: string, includeText: boolean) {

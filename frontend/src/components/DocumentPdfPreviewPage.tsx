@@ -4,7 +4,7 @@ import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getDocumentChunks, getDocumentDetailByFilename, getDocumentRawUrl } from '../api/rag';
+import { getDocumentChunks, getDocumentIdByFilename, getDocumentRawUrl } from '../api/rag';
 import type { DocumentChunksData } from '../types/rag';
 
 const { Header, Content } = Layout;
@@ -57,6 +57,10 @@ function findBestLineTop(lines: PdfLineInfo[], title: string) {
   const fuzzy = lines.find((line) => line.normalized.includes(prefix));
   return fuzzy ? fuzzy.top : null;
 }
+
+const wait = (ms: number) => new Promise((resolve) => {
+  window.setTimeout(resolve, ms);
+});
 
 function PdfCanvasPage({ pdfDoc, pageNumber, onLinesReady }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -232,14 +236,18 @@ export function DocumentPdfPreviewPage() {
           if (!routeFilename) {
             throw new Error('文档ID或文件名不能为空');
           }
-          const detail = await getDocumentDetailByFilename(routeFilename);
-          targetDocId = String(detail?.document?.doc_id ?? '').trim();
+          const detail = await getDocumentIdByFilename(routeFilename);
+          targetDocId = String(detail?.data?.doc_id ?? '').trim();
           if (!targetDocId) {
             throw new Error('按文件名未找到文档');
           }
         }
 
-        const result = await getDocumentChunks(targetDocId, false);
+        let result = await getDocumentChunks(targetDocId, false);
+        if ((result.data?.catalog ?? []).length === 0) {
+          await wait(220);
+          result = await getDocumentChunks(targetDocId, false);
+        }
         if (!cancelled) {
           setResolvedDocId(targetDocId);
           setData(result.data);

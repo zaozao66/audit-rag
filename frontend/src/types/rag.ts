@@ -205,6 +205,22 @@ export interface DocumentDetailResponse {
   document: DocumentDetailData;
 }
 
+export interface DocumentIdByFilenameResponse {
+  success: boolean;
+  data: {
+    filename: string;
+    doc_id: string;
+    upload_time: string;
+    status: 'active' | 'deleted' | string;
+    matched_count: number;
+    candidates: Array<{
+      doc_id: string;
+      upload_time: string;
+      status: 'active' | 'deleted' | string;
+    }>;
+  };
+}
+
 export interface DocumentChunksResponse {
   success: boolean;
   data: DocumentChunksData;
