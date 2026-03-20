@@ -7,10 +7,15 @@ import { listRegulationGroups, uploadArchive, uploadFiles } from '../api/rag';
 import type { RegulationGroupItem, UploadResponse } from '../types/rag';
 
 interface UploadPanelProps {
+  scope: 'audit' | 'discipline';
   onUploaded: () => void;
 }
 
-export function UploadPanel({ onUploaded }: UploadPanelProps) {
+function scopeLabel(scope: 'audit' | 'discipline') {
+  return scope === 'audit' ? '审计' : '纪检';
+}
+
+export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
   const [uploadMode, setUploadMode] = useState<'files' | 'archive'>('files');
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [archiveList, setArchiveList] = useState<UploadFile[]>([]);
@@ -52,7 +57,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
       }
     };
     void loadGroups();
-  }, [enableRegulationGroup, isRegulationDocType]);
+  }, [scope, enableRegulationGroup, isRegulationDocType]);
 
   const handleUpload = async () => {
     if (uploadMode === 'files' && files.length === 0) {
@@ -100,7 +105,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
   };
 
   return (
-    <Card title="文件上传入库" className="app-card">
+    <Card title={`文件上传入库（${scopeLabel(scope)}）`} className="app-card">
       <Form layout="vertical">
         <Form.Item label="上传模式">
           <Radio.Group

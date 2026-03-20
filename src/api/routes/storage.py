@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from flask import Blueprint, current_app, jsonify, request
 
+from src.api.routes.scope_utils import extract_scope_from_request
 from src.api.services.rag_service import RAGService
 from src.ingestion.parsers.archive_processor import (
     ArchiveValidationError,
@@ -48,6 +49,16 @@ def _normalize_chunker_type(value: str) -> str:
     if chunker_type == 'issue':
         return 'audit_issue'
     return chunker_type
+
+
+def _ensure_no_custom_store_path(store_path: Any) -> None:
+    if str(store_path or "").strip():
+        raise ValueError("多知识域模式下不支持自定义store_path，请改用scope参数")
+
+
+def _get_scoped_processor(service: RAGService, chunker_type: str = None, json_data: Dict[str, Any] = None):
+    scope = extract_scope_from_request(request, json_data=json_data)
+    return service.get_processor(scope=scope, chunker_type=chunker_type)
 
 
 def _is_regulation_doc_type(doc_type: str) -> bool:
@@ -161,13 +172,12 @@ def store_documents():
             if chunker_type == 'issue':
                 chunker_type = 'audit_issue'
 
-        service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor(chunker_type=chunker_type)
-
         if not is_json_request:
             return jsonify({"error": "请求必须是JSON格式"}), 400
 
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = _get_scoped_processor(service, chunker_type=chunker_type, json_data=data)
         if 'documents' not in data:
             return jsonify({"error": "缺少documents字段"}), 400
 
@@ -176,10 +186,7 @@ def store_documents():
             return jsonify({"error": "documents必须是一个文档列表"}), 400
 
         save_after_processing = data.get('save_after_processing', True)
-        store_path = data.get('store_path')
-
-        if store_path:
-            rag_processor.vector_store_path = store_path
+        _ensure_no_custom_store_path(data.get('store_path'))
 
         num_processed = rag_processor.process_documents(documents, save_after_processing=save_after_processing)
 
@@ -200,6 +207,8 @@ def store_documents():
             "processed_count": num_processed,
             "chunker_used": chunker_type
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("存储文档时出错: %s", e)
         return jsonify({"error": f"存储文档失败: {str(e)}"}), 500
@@ -209,16 +218,9 @@ def store_documents():
 def clear_vector_store():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
-
-        store_path = None
-        if request.is_json:
-            data = request.get_json()
-            if data:
-                store_path = data.get('store_path')
-
-        if store_path:
-            rag_processor.vector_store_path = store_path
+        data = request.get_json(silent=True) if request.is_json else {}
+        _ensure_no_custom_store_path((data or {}).get('store_path'))
+        rag_processor = _get_scoped_processor(service, json_data=data)
 
         rag_processor.clear_vector_store()
 
@@ -236,6 +238,8 @@ def clear_vector_store():
             "success": True,
             "message": "向量库已清空并保存"
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("清空向量库时出错: %s", e)
         return jsonify({"error": f"清空向量库失败: {str(e)}"}), 500
@@ -245,7 +249,7 @@ def clear_vector_store():
 def rebuild_graph_index():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         rag_processor.load_vector_store()
         stats = rag_processor.rebuild_graph_index(save=True)
@@ -256,6 +260,8 @@ def rebuild_graph_index():
             "graph_stats": stats,
             "graph_info": rag_processor.get_graph_stats(),
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("重建图索引失败: %s", e)
         return jsonify({"error": f"重建图索引失败: {str(e)}"}), 500
@@ -265,7 +271,7 @@ def rebuild_graph_index():
 def list_graph_nodes():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         page = int(request.args.get('page', 1))
         page_size = int(request.args.get('page_size', 20))
@@ -284,6 +290,8 @@ def list_graph_nodes():
             include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **data})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取图节点失败: %s", e)
         return jsonify({"error": f"获取图节点失败: {str(e)}"}), 500
@@ -293,7 +301,7 @@ def list_graph_nodes():
 def list_graph_edges():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         page = int(request.args.get('page', 1))
         page_size = int(request.args.get('page_size', 20))
@@ -312,6 +320,8 @@ def list_graph_edges():
             include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **data})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取图边失败: %s", e)
         return jsonify({"error": f"获取图边失败: {str(e)}"}), 500
@@ -320,10 +330,9 @@ def list_graph_edges():
 @storage_bp.route('/graph/subgraph', methods=['POST'])
 def get_graph_subgraph():
     try:
-        service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
-
         data = request.get_json(silent=True) or {}
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = _get_scoped_processor(service, json_data=data)
         query = data.get('query')
         node_ids = data.get('node_ids') if isinstance(data.get('node_ids'), list) else []
         hops = int(data.get('hops', 2))
@@ -338,6 +347,8 @@ def get_graph_subgraph():
             include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **result})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取子图失败: %s", e)
         return jsonify({"error": f"获取子图失败: {str(e)}"}), 500
@@ -346,10 +357,9 @@ def get_graph_subgraph():
 @storage_bp.route('/graph/path', methods=['POST'])
 def get_graph_path():
     try:
-        service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
-
         data = request.get_json(silent=True) or {}
+        service: RAGService = current_app.extensions['rag_service']
+        rag_processor = _get_scoped_processor(service, json_data=data)
         source_node_id = str(data.get('source_node_id', '') or '')
         target_node_id = str(data.get('target_node_id', '') or '')
         source_query = str(data.get('source_query', '') or '')
@@ -377,6 +387,8 @@ def get_graph_path():
             include_evidence_nodes=include_evidence_nodes,
         )
         return jsonify({"success": True, **result})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取图路径失败: %s", e)
         return jsonify({"error": f"获取图路径失败: {str(e)}"}), 500
@@ -386,13 +398,15 @@ def get_graph_path():
 def get_graph_overview():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         top_n = int(request.args.get('top_n', 8))
         top_n = max(3, min(50, top_n))
 
         result = rag_processor.get_graph_overview(top_n=top_n)
         return jsonify({"success": True, **result})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取图谱总览失败: %s", e)
         return jsonify({"error": f"获取图谱总览失败: {str(e)}"}), 500
@@ -402,7 +416,7 @@ def get_graph_overview():
 def get_graph_node_detail(node_id: str):
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         max_neighbors = int(request.args.get('max_neighbors', 120))
         max_neighbors = max(20, min(300, max_neighbors))
@@ -412,6 +426,8 @@ def get_graph_node_detail(node_id: str):
             return jsonify({"error": "节点不存在"}), 404
 
         return jsonify({"success": True, **result})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取图节点详情失败: %s", e)
         return jsonify({"error": f"获取图节点详情失败: {str(e)}"}), 500
@@ -425,7 +441,7 @@ def upload_and_store_documents():
         )
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor(chunker_type=chunker_type)
+        rag_processor = _get_scoped_processor(service, chunker_type=chunker_type)
 
         if 'files' not in request.files:
             return jsonify({"error": "没有上传文件"}), 400
@@ -435,9 +451,7 @@ def upload_and_store_documents():
             return jsonify({"error": "没有选择任何文件"}), 400
 
         save_after_processing = request.form.get('save_after_processing', 'true').lower() == 'true'
-        store_path = request.form.get('store_path')
-        if store_path:
-            rag_processor.vector_store_path = store_path
+        _ensure_no_custom_store_path(request.form.get('store_path'))
 
         temp_file_paths: List[str] = []
         original_filenames: List[str] = []
@@ -505,6 +519,8 @@ def upload_and_store_documents():
             "failed_files": parse_errors,
             "chunker_used": chunker_type,
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("上传并存储文档时出错: %s", e)
         return jsonify({"error": f"上传并存储文档失败: {str(e)}"}), 500
@@ -519,7 +535,7 @@ def upload_archive_and_store_documents():
         )
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor(chunker_type=chunker_type)
+        rag_processor = _get_scoped_processor(service, chunker_type=chunker_type)
 
         uploaded_archive = request.files.get('archive')
         if not uploaded_archive or not uploaded_archive.filename:
@@ -530,9 +546,7 @@ def upload_archive_and_store_documents():
             return jsonify({"error": "仅支持上传 ZIP 压缩包"}), 400
 
         save_after_processing = _to_bool(request.form.get('save_after_processing', 'true'), default=True)
-        store_path = request.form.get('store_path')
-        if store_path:
-            rag_processor.vector_store_path = store_path
+        _ensure_no_custom_store_path(request.form.get('store_path'))
 
         doc_type = request.form.get('doc_type', 'internal_regulation')
         enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
@@ -620,6 +634,8 @@ def upload_archive_and_store_documents():
             "chunker_used": chunker_type,
         })
     except ArchiveValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("上传压缩包并存储文档时出错: %s", e)

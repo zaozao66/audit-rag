@@ -1,7 +1,27 @@
 export const API_BASE = import.meta.env.DEV ? '/api' : '';
+const DEFAULT_SCOPE = (import.meta.env.VITE_KNOWLEDGE_SCOPE || 'audit').trim().toLowerCase();
+
+export function getCurrentKnowledgeScope(): string {
+  if (typeof window === 'undefined') {
+    return DEFAULT_SCOPE;
+  }
+  const localValue = String(window.localStorage.getItem('rag.scope') || '').trim().toLowerCase();
+  return localValue || DEFAULT_SCOPE;
+}
+
+export function buildScopedHeaders(initHeaders?: HeadersInit): Headers {
+  const headers = new Headers(initHeaders || {});
+  if (!headers.has('X-Knowledge-Scope')) {
+    headers.set('X-Knowledge-Scope', getCurrentKnowledgeScope());
+  }
+  return headers;
+}
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...(init || {}),
+    headers: buildScopedHeaders(init?.headers),
+  });
 
   let payload: unknown = null;
   const text = await response.text();

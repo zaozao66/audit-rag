@@ -1,6 +1,7 @@
 import os
-from flask import Blueprint, current_app, jsonify, send_from_directory
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 
+from src.api.routes.scope_utils import extract_scope_from_request
 from src.api.services.rag_service import RAGService
 
 
@@ -19,7 +20,8 @@ def health_check():
 def get_info():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        scope = extract_scope_from_request(request)
+        rag_processor = service.get_processor(scope=scope)
 
         try:
             rag_processor.load_vector_store()
@@ -38,11 +40,14 @@ def get_info():
             "vector_count": vector_count,
             "dimension": rag_processor.dimension or 1024,
             "chunker_type": rag_processor.chunker_type,
+            "scope": rag_processor.scope,
             "embedding_model": rag_processor.embedding_provider.model_name if hasattr(rag_processor.embedding_provider, 'model_name') else 'unknown',
             "rerank_enabled": rag_processor.rerank_provider is not None,
             "document_stats": doc_stats,
             "graph": graph_stats,
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取系统信息时出错: %s", e)
         return jsonify({"error": f"获取系统信息失败: {str(e)}"}), 500

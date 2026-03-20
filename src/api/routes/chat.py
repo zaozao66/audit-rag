@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
+from src.api.routes.scope_utils import extract_scope_from_request
 from src.api.services.conversation_service import ConversationService
 from src.api.services.rag_service import RAGService
 
@@ -110,16 +111,17 @@ def _extract_latest_user_query(messages: List[Dict[str, str]]) -> Tuple[str, Lis
 def _prepare_chat_turn(
     service: RAGService,
     conversation_service: ConversationService,
+    scope: str,
     messages: List[Dict[str, str]],
     session_id: Optional[str],
     top_k: int,
     retrieval_overrides: Dict[str, Any],
 ) -> Dict[str, Any]:
-    rag_processor = service.get_processor(use_rerank=True, use_llm=True)
+    rag_processor = service.get_processor(scope=scope, use_rerank=True, use_llm=True)
     if not rag_processor.llm_provider:
         raise ValueError("LLM功能未启用，请在初始化时传入llm_provider")
 
-    session = conversation_service.get_or_create_session(session_id)
+    session = conversation_service.get_or_create_session(session_id, scope=scope)
     final_session_id = session.session_id
 
     query, history_messages = _extract_latest_user_query(messages)
@@ -127,10 +129,10 @@ def _prepare_chat_turn(
         raise ValueError("未找到用户消息")
 
     if history_messages:
-        conversation_service.sync_client_messages(final_session_id, history_messages)
+        conversation_service.sync_client_messages(final_session_id, history_messages, scope=scope)
 
-    recent_messages = conversation_service.get_recent_messages(final_session_id, max_items=8)
-    summary = conversation_service.get_summary(final_session_id)
+    recent_messages = conversation_service.get_recent_messages(final_session_id, max_items=8, scope=scope)
+    summary = conversation_service.get_summary(final_session_id, scope=scope)
 
     llm_provider = rag_processor.llm_provider
     standalone_query = llm_provider.rewrite_query(
@@ -139,7 +141,7 @@ def _prepare_chat_turn(
         conversation_summary=summary,
     )
 
-    last_retrieval = conversation_service.get_last_retrieval(final_session_id)
+    last_retrieval = conversation_service.get_last_retrieval(final_session_id, scope=scope)
     route_info = llm_provider.route_retrieval(
         query=standalone_query,
         recent_messages=recent_messages,
@@ -203,6 +205,7 @@ def _prepare_chat_turn(
             contexts=contexts,
             citations=citations,
             search_results=search_results,
+            scope=scope,
         )
 
     return {
@@ -224,6 +227,7 @@ def _prepare_chat_turn(
 def _finalize_chat_turn(
     conversation_service: ConversationService,
     llm_provider: Any,
+    scope: str,
     session_id: str,
     query: str,
     answer: str,
@@ -235,16 +239,17 @@ def _finalize_chat_turn(
             {"role": "user", "content": query},
             {"role": "assistant", "content": answer},
         ],
+        scope=scope,
     )
 
     updated_summary = previous_summary
-    if conversation_service.should_refresh_summary(session_id, every_n_turns=4):
-        messages_for_summary = conversation_service.get_recent_messages(session_id, max_items=12)
+    if conversation_service.should_refresh_summary(session_id, every_n_turns=4, scope=scope):
+        messages_for_summary = conversation_service.get_recent_messages(session_id, max_items=12, scope=scope)
         updated_summary = llm_provider.summarize_messages(
             recent_messages=messages_for_summary,
             previous_summary=previous_summary,
         )
-        conversation_service.set_summary(session_id, updated_summary)
+        conversation_service.set_summary(session_id, updated_summary, scope=scope)
 
     return updated_summary
 
@@ -252,6 +257,7 @@ def _finalize_chat_turn(
 def _stream_chat_completion(
     service: RAGService,
     conversation_service: ConversationService,
+    scope: str,
     messages: List[Dict[str, str]],
     session_id: Optional[str],
     top_k: int,
@@ -274,6 +280,7 @@ def _stream_chat_completion(
         turn = _prepare_chat_turn(
             service=service,
             conversation_service=conversation_service,
+            scope=scope,
             messages=messages,
             session_id=session_id,
             top_k=top_k,
@@ -350,6 +357,7 @@ def _stream_chat_completion(
         updated_summary = _finalize_chat_turn(
             conversation_service=conversation_service,
             llm_provider=llm_provider,
+            scope=scope,
             session_id=final_session_id,
             query=query,
             answer=final_answer,
@@ -368,7 +376,7 @@ def _stream_chat_completion(
             },
         )
         yield f"data: {json.dumps({'event': 'citations', 'citations': citations}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'event': 'session', 'session_id': final_session_id, 'summary': updated_summary}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'event': 'session', 'session_id': final_session_id, 'summary': updated_summary, 'scope': scope}, ensure_ascii=False)}\n\n"
 
         final_chunk = {
             "choices": [{
@@ -395,9 +403,9 @@ def _stream_chat_completion(
 def search_with_intent():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor(use_rerank=True, use_llm=True)
-
         data = request.get_json(silent=True) or {}
+        scope = extract_scope_from_request(request, json_data=data)
+        rag_processor = service.get_processor(scope=scope, use_rerank=True, use_llm=True)
         query = data.get('query')
         if not query:
             return jsonify({"error": "缺少query参数"}), 400
@@ -410,6 +418,7 @@ def search_with_intent():
         )
         return jsonify({
             "success": True,
+            "scope": rag_processor.scope,
             "query": query,
             "intent": result['intent'],
             "intent_reason": result['intent_reason'],
@@ -417,6 +426,8 @@ def search_with_intent():
             "retrieval_mode": result.get('retrieval_mode', 'hybrid'),
             "results": _format_search_results(result['search_results']),
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("智能搜索失败: %s", e)
         return jsonify({"error": f"搜索失败: {str(e)}"}), 500
@@ -426,9 +437,9 @@ def search_with_intent():
 def ask_with_llm():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor(use_rerank=True, use_llm=True)
-
         data = request.get_json(silent=True) or {}
+        scope = extract_scope_from_request(request, json_data=data)
+        rag_processor = service.get_processor(scope=scope, use_rerank=True, use_llm=True)
         if not data or 'query' not in data:
             return jsonify({"error": "缺少query字段"}), 400
 
@@ -443,6 +454,7 @@ def ask_with_llm():
 
         return jsonify({
             "success": True,
+            "scope": rag_processor.scope,
             "query": query,
             "intent": result.get('intent', 'unknown'),
             "retrieval_mode": result.get('retrieval_mode', 'hybrid'),
@@ -457,8 +469,7 @@ def ask_with_llm():
             return jsonify({"error": "LLM功能未配置，请在config.json中配置LLM API密钥"}), 503
         if "向量库不存在" in str(e):
             return jsonify({"error": "向量库不存在，请先存储文档"}), 404
-        current_app.logger.error("LLM问答时出错: %s", e)
-        return jsonify({"error": f"LLM问答失败: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("LLM问答时出错: %s", e)
         return jsonify({"error": f"LLM问答失败: {str(e)}"}), 500
@@ -473,6 +484,8 @@ def chat_completions():
         data = request.get_json()
         if not data or 'messages' not in data:
             return jsonify({"error": "缺少messages字段"}), 400
+        scope = extract_scope_from_request(request, json_data=data)
+        resolved_scope = service.resolve_scope(scope)
 
         messages = _normalize_chat_messages(data['messages'])
         if not messages:
@@ -488,7 +501,8 @@ def chat_completions():
         retrieval_overrides = _parse_retrieval_overrides(data)
 
         current_app.logger.info(
-            "OpenAI兼容接口收到请求: query='%s...', stream=%s, top_k=%s, retrieval_mode=%s, session_id=%s",
+            "OpenAI兼容接口收到请求: scope=%s query='%s...', stream=%s, top_k=%s, retrieval_mode=%s, session_id=%s",
+            resolved_scope,
             user_message[:50],
             stream,
             top_k,
@@ -501,6 +515,7 @@ def chat_completions():
                 _stream_chat_completion(
                     service=service,
                     conversation_service=conversation_service,
+                    scope=resolved_scope,
                     messages=messages,
                     session_id=session_id,
                     top_k=top_k,
@@ -516,6 +531,7 @@ def chat_completions():
         turn = _prepare_chat_turn(
             service=service,
             conversation_service=conversation_service,
+            scope=resolved_scope,
             messages=messages,
             session_id=session_id,
             top_k=top_k,
@@ -533,6 +549,7 @@ def chat_completions():
         updated_summary = _finalize_chat_turn(
             conversation_service=conversation_service,
             llm_provider=turn["llm_provider"],
+            scope=resolved_scope,
             session_id=turn["session_id"],
             query=turn["query"],
             answer=llm_result["answer"],
@@ -556,6 +573,7 @@ def chat_completions():
             "route_reason": turn["route_reason"],
             "standalone_query": turn["standalone_query"],
             "session_id": turn["session_id"],
+            "scope": resolved_scope,
             "summary": updated_summary,
             "search_results": _format_search_results(turn["search_results"]),
             "citations": turn["citations"],

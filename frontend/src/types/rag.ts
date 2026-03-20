@@ -103,6 +103,7 @@ export interface StreamSessionEvent {
   event: 'session';
   session_id: string;
   summary?: string;
+  scope?: string;
 }
 
 export interface DocumentStats {
@@ -117,6 +118,7 @@ export interface DocumentStats {
 
 export interface InfoResponse {
   status: string;
+  scope?: string;
   vector_store_status: string;
   vector_count: number;
   dimension: number;

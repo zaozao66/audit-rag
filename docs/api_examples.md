@@ -2,6 +2,11 @@
 
 本文档提供RAG系统HTTP API的各种使用示例。
 
+多知识域说明：
+- 推荐所有请求携带 Header `X-Knowledge-Scope`（`audit` 或 `discipline`）
+- 本文示例默认使用 `audit`
+- `store_path` 透传已禁用
+
 ## 启动API服务器
 
 ```bash
@@ -52,6 +57,7 @@ curl -X GET http://localhost:8000/health
 ```bash
 curl -X POST http://localhost:8000/store \
   -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: audit" \
   -d '{
     "documents": [
       {
@@ -79,19 +85,19 @@ curl -X POST http://localhost:8000/store \
 }
 ```
 
-#### 指定自定义存储路径
+#### 指定知识域写入（纪检域示例）
 
 ```bash
 curl -X POST http://localhost:8000/store \
   -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: discipline" \
   -d '{
     "documents": [
       {
         "doc_id": "doc_3",
-        "text": "这是另一个文档的内容..."
+        "text": "这是纪检知识域的文档内容..."
       }
-    ],
-    "store_path": "./data/my_custom_store"
+    ]
   }'
 ```
 
@@ -100,6 +106,7 @@ curl -X POST http://localhost:8000/store \
 ```bash
 curl -X POST http://localhost:8000/search_with_intent \
   -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: audit" \
   -d '{
     "query": "采购审批流程有哪些制度要求？"
   }'
@@ -110,6 +117,7 @@ curl -X POST http://localhost:8000/search_with_intent \
 ```bash
 curl -N -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: audit" \
   -d '{
     "messages": [{"role": "user", "content": "请总结该制度的关键控制点"}],
     "stream": true
@@ -135,20 +143,24 @@ curl -X POST http://localhost:8000/clear
 }
 ```
 
-#### 指定自定义存储路径清空
+#### 按知识域清空（纪检域示例）
 
 ```bash
 curl -X POST http://localhost:8000/clear \
-  -H "Content-Type: application/json" \
-  -d '{
-    "store_path": "./data/my_custom_store"
-  }'
+  -H "X-Knowledge-Scope: discipline"
 ```
 
 ### 6. 获取系统信息
 
 ```bash
 curl -X GET http://localhost:8000/info
+```
+
+按纪检域查看系统信息：
+
+```bash
+curl -X GET http://localhost:8000/info \
+  -H "X-Knowledge-Scope: discipline"
 ```
 
 响应示例：
@@ -183,6 +195,7 @@ curl -X GET http://localhost:8000/info
 
 ```bash
 curl -X POST http://localhost:8000/upload_store \
+  -H "X-Knowledge-Scope: audit" \
   -F "files=@/path/to/审计报告.docx" \
   -F "files=@/path/to/制度汇编.pdf" \
   -F "chunker_type=smart" \

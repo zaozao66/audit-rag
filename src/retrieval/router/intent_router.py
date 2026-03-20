@@ -7,8 +7,21 @@ logger = logging.getLogger(__name__)
 class IntentRouter:
     """意图路由逻辑处理"""
     
-    def __init__(self, llm_provider: Optional[LLMProvider] = None):
+    def __init__(
+        self,
+        llm_provider: Optional[LLMProvider] = None,
+        enabled: bool = True,
+        default_intent: str = "comprehensive_query",
+        fixed_top_k: Optional[int] = None,
+        fixed_doc_types: Optional[List[str]] = None,
+        default_retrieval_plan: Optional[Dict[str, Any]] = None,
+    ):
         self.llm_provider = llm_provider
+        self.enabled = bool(enabled)
+        self.default_intent = str(default_intent or "comprehensive_query")
+        self.fixed_top_k = fixed_top_k
+        self.fixed_doc_types = list(fixed_doc_types or [])
+        self.default_retrieval_plan = dict(default_retrieval_plan or {})
 
     def get_routed_params(
         self,
@@ -19,16 +32,34 @@ class IntentRouter:
         retrieval_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """统一意图识别和参数路由逻辑（含 GraphRAG 检索参数）"""
-        intent_info = {"intent": "comprehensive_query", "suggested_top_k": default_top_k, "reason": "默认路由"}
+        fallback_top_k = default_top_k
+        if self.fixed_top_k is not None:
+            try:
+                fallback_top_k = int(self.fixed_top_k)
+            except (TypeError, ValueError):
+                fallback_top_k = default_top_k
+
+        intent_info = {
+            "intent": self.default_intent,
+            "suggested_top_k": fallback_top_k,
+            "reason": "默认路由",
+        }
         
-        if self.llm_provider:
+        if self.enabled and self.llm_provider:
             try:
                 intent_info = self.llm_provider.detect_intent(query)
             except Exception as e:
                 logger.warning(f"意图识别失败，使用默认路由: {e}")
+        elif not self.enabled:
+            intent_info["reason"] = "当前知识域已关闭意图识别，使用固定路由策略"
         
-        intent = intent_info.get('intent', 'comprehensive_query')
+        intent = intent_info.get('intent', self.default_intent)
         current_top_k = intent_info.get('suggested_top_k', default_top_k)
+        if self.fixed_top_k is not None:
+            try:
+                current_top_k = int(self.fixed_top_k)
+            except (TypeError, ValueError):
+                current_top_k = intent_info.get('suggested_top_k', default_top_k)
         
         # 汇总分析意图强化
         if intent == 'audit_analysis':
@@ -36,12 +67,15 @@ class IntentRouter:
             
         # 文档类型映射
         current_doc_types = intent_info.get('doc_types', None)
+        if self.fixed_doc_types:
+            current_doc_types = list(self.fixed_doc_types)
         if current_doc_types and 'audit_report' in current_doc_types:
             current_doc_types.remove('audit_report')
             current_doc_types.extend(['internal_report', 'external_report'])
             current_doc_types = list(set(current_doc_types))
 
         retrieval_plan = self._default_retrieval_plan_by_intent(intent)
+        retrieval_plan.update(self.default_retrieval_plan)
         retrieval_plan.update(self._parse_retrieval_plan_from_llm(intent_info))
 
         if retrieval_overrides:

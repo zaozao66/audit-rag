@@ -38,7 +38,41 @@
       "max_messages": 24,
       "ttl_minutes": 120
     },
-    "vector_store_path": "./data/vector_store_text_embedding"
+    "default_scope": "audit",
+    "scope_required": false,
+    "knowledge_scopes": {
+      "audit": {
+        "vector_store_path": "./data/vector_store_text_embedding",
+        "features": {
+          "intent_router": true
+        },
+        "intent_router": {
+          "enabled": true
+        },
+        "retrieval_defaults": {
+          "retrieval_mode": "hybrid",
+          "graph_top_k": 12,
+          "graph_hops": 2,
+          "hybrid_alpha": 0.65
+        }
+      },
+      "discipline": {
+        "vector_store_path": "./data/discipline/vector_store_text_embedding",
+        "features": {
+          "intent_router": false
+        },
+        "intent_router": {
+          "enabled": false,
+          "fixed_top_k": 8
+        },
+        "retrieval_defaults": {
+          "retrieval_mode": "vector",
+          "graph_top_k": 8,
+          "graph_hops": 1,
+          "hybrid_alpha": 1.0
+        }
+      }
+    }
   },
   "production": {
     "embedding_model": {
@@ -79,7 +113,41 @@
       "max_messages": 24,
       "ttl_minutes": 120
     },
-    "vector_store_path": "./data/vector_store_text_embedding"
+    "default_scope": "audit",
+    "scope_required": false,
+    "knowledge_scopes": {
+      "audit": {
+        "vector_store_path": "./data/vector_store_text_embedding",
+        "features": {
+          "intent_router": true
+        },
+        "intent_router": {
+          "enabled": true
+        },
+        "retrieval_defaults": {
+          "retrieval_mode": "hybrid",
+          "graph_top_k": 12,
+          "graph_hops": 2,
+          "hybrid_alpha": 0.65
+        }
+      },
+      "discipline": {
+        "vector_store_path": "./data/discipline/vector_store_text_embedding",
+        "features": {
+          "intent_router": false
+        },
+        "intent_router": {
+          "enabled": false,
+          "fixed_top_k": 8
+        },
+        "retrieval_defaults": {
+          "retrieval_mode": "vector",
+          "graph_top_k": 8,
+          "graph_hops": 1,
+          "hybrid_alpha": 1.0
+        }
+      }
+    }
   },
   "default_env": "development",
   "current_env": "development"

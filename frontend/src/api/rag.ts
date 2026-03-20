@@ -1,4 +1,4 @@
-import { API_BASE, apiFetch } from './client';
+import { API_BASE, apiFetch, buildScopedHeaders, getCurrentKnowledgeScope } from './client';
 import type {
   AskResponse,
   ClearAllDocumentsResponse,
@@ -126,7 +126,7 @@ export async function streamAskWithLlm(
   const payload = buildRetrievalPayload(options);
   const response = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: buildScopedHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       messages,
       stream: true,
@@ -288,7 +288,8 @@ export function getDocumentChunks(docId: string, includeText: boolean) {
 }
 
 export function getDocumentRawUrl(docId: string) {
-  return `${API_BASE}/documents/${encodeURIComponent(docId)}/raw`;
+  const query = new URLSearchParams({ scope: getCurrentKnowledgeScope() });
+  return `${API_BASE}/documents/${encodeURIComponent(docId)}/raw?${query.toString()}`;
 }
 
 export function deleteDocument(docId: string) {

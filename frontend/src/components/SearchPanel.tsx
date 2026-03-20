@@ -33,7 +33,15 @@ interface ActiveCitationState {
   citation: CitationItem;
 }
 
-export function SearchPanel() {
+interface SearchPanelProps {
+  scope: 'audit' | 'discipline';
+}
+
+function scopeLabel(scope: 'audit' | 'discipline') {
+  return scope === 'audit' ? '审计' : '纪检';
+}
+
+export function SearchPanel({ scope }: SearchPanelProps) {
   const [sessionId, setSessionId] = useState(() => createSessionId());
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -44,7 +52,7 @@ export function SearchPanel() {
     {
       id: createMessageId(),
       role: 'assistant',
-      content: '你好，我会结合知识库回答。你可以连续追问，我会保留上下文。',
+      content: `你好，当前在${scopeLabel(scope)}知识域，我会结合该域知识库回答。你可以连续追问，我会保留上下文。`,
       citations: []
     }
   ]);
@@ -203,6 +211,7 @@ export function SearchPanel() {
     }>
       <Space direction="vertical" style={{ width: '100%' }} size={8}>
         <Typography.Text type="secondary">{progressText}</Typography.Text>
+        <Typography.Text type="secondary">知识域: <Typography.Text code>{scopeLabel(scope)}</Typography.Text></Typography.Text>
         <Typography.Text type="secondary">会话ID: <Typography.Text code>{sessionId}</Typography.Text></Typography.Text>
         {error ? <Alert type="error" showIcon message={error} /> : null}
       </Space>

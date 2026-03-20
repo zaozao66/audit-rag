@@ -1,11 +1,10 @@
 import { FileSearchOutlined, FileTextOutlined, InboxOutlined, MessageOutlined } from '@ant-design/icons';
-import { Layout, Menu, Typography } from 'antd';
+import { Layout, Menu, Segmented, Space, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { getDocumentStats, getInfo, listDocuments } from './api/rag';
 import { DocumentPdfPreviewPage } from './components/DocumentPdfPreviewPage';
-import { DocumentPreviewPage } from './components/DocumentPreviewPage';
 import { DocumentsPanel } from './components/DocumentsPanel';
 import { RegulationComparePage } from './components/RegulationComparePage';
 import { SearchPanel } from './components/SearchPanel';
@@ -14,10 +13,25 @@ import { UploadPanel } from './components/UploadPanel';
 import type { DocumentRecord, DocumentStats, InfoResponse } from './types/rag';
 
 const { Header, Sider, Content } = Layout;
+type KnowledgeScope = 'audit' | 'discipline';
+
+const SCOPE_OPTIONS: Array<{ label: string; value: KnowledgeScope }> = [
+  { label: '审计', value: 'audit' },
+  { label: '纪检', value: 'discipline' }
+];
+
+function getInitialScope(): KnowledgeScope {
+  const fallback: KnowledgeScope = 'audit';
+  if (typeof window === 'undefined') return fallback;
+  const raw = String(window.localStorage.getItem('rag.scope') || '').trim().toLowerCase();
+  if (raw === 'discipline') return 'discipline';
+  return 'audit';
+}
 
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const [scope, setScope] = useState<KnowledgeScope>(() => getInitialScope());
 
   const [info, setInfo] = useState<InfoResponse | null>(null);
   const [stats, setStats] = useState<DocumentStats | null>(null);
@@ -37,7 +51,7 @@ export default function App() {
     } finally {
       setLoadingMeta(false);
     }
-  }, []);
+  }, [scope]);
 
   const loadDocs = useCallback(async () => {
     setLoadingDocs(true);
@@ -47,7 +61,13 @@ export default function App() {
     } finally {
       setLoadingDocs(false);
     }
-  }, [docType, keyword, includeDeleted]);
+  }, [scope, docType, keyword, includeDeleted]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('rag.scope', scope);
+    }
+  }, [scope]);
 
   useEffect(() => {
     void loadMeta();
@@ -72,15 +92,6 @@ export default function App() {
   const onMenuClick: MenuProps['onClick'] = (event: any) => {
     navigate(`/${String(event.key)}`);
   };
-
-  if (location.pathname.startsWith('/documents/preview/')) {
-    return (
-      <Routes>
-        <Route path="/documents/preview/:docId" element={<DocumentPreviewPage />} />
-        <Route path="*" element={<Navigate to="/documents" replace />} />
-      </Routes>
-    );
-  }
 
   if (location.pathname.startsWith('/documents/pdf-preview')) {
     return (
@@ -122,19 +133,35 @@ export default function App() {
 
       <Layout>
         <Header className="antd-header">
-          <Typography.Title level={4} style={{ margin: 0 }}>审计知识库控制台</Typography.Title>
+          <div className="header-row">
+            <Space size={10}>
+              <Typography.Title level={4} style={{ margin: 0 }}>知识库控制台</Typography.Title>
+              <Tag color={scope === 'audit' ? 'processing' : 'purple'}>
+                {scope === 'audit' ? '审计域' : '纪检域'}
+              </Tag>
+            </Space>
+            <Space size={8}>
+              <Typography.Text type="secondary">知识域</Typography.Text>
+              <Segmented
+                size="middle"
+                value={scope}
+                options={SCOPE_OPTIONS}
+                onChange={(value) => setScope(value as KnowledgeScope)}
+              />
+            </Space>
+          </div>
         </Header>
         <Content className="antd-content">
           <Routes>
             <Route
               path="/chat"
-              element={<SearchPanel />}
+              element={<SearchPanel key={`search-${scope}`} scope={scope} />}
             />
             <Route
               path="/upload"
               element={(
                 <div className="tab-content tab-documents">
-                  <UploadPanel onUploaded={refreshAll} />
+                  <UploadPanel key={`upload-${scope}`} scope={scope} onUploaded={refreshAll} />
                 </div>
               )}
             />
@@ -143,6 +170,8 @@ export default function App() {
               element={(
                 <div className="tab-content tab-documents">
                   <DocumentsPanel
+                    key={`documents-${scope}`}
+                    scope={scope}
                     documents={documents}
                     docTypeOptions={Object.keys(stats?.by_type ?? {})}
                     loading={loadingDocs}

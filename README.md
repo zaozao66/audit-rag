@@ -76,11 +76,23 @@ API端点：
 - `GET  /documents/<doc_id>/chunks` - 文档分块详情
 - `GET  /documents/stats` - 文档统计
 
+多知识域隔离（审计/纪检）：
+
+- 请求可通过 Header `X-Knowledge-Scope` 指定知识域，取值示例：`audit`、`discipline`
+- 也支持在 query/body/form 中传 `scope` 字段
+- 未显式传 scope 时使用 `config.json` 的 `default_scope`
+- `store_path` 透传已禁用，避免绕过隔离写入错误知识库
+
+前端说明：
+
+- 文档管理页面已移除“全文预览”，仅保留“PDF全屏预览”
+
 #### 流式问答示例（推荐）
 
 ```bash
 curl -N -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: audit" \
   -d '{
     "messages": [{"role":"user","content":"请总结审计风险重点"}],
     "stream": true

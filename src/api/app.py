@@ -12,6 +12,15 @@ from src.api.services.rag_service import RAGService
 from src.utils.config_loader import load_config
 
 
+DEFAULT_CORS_ALLOW_HEADERS = [
+    'Content-Type',
+    'Authorization',
+    'X-Knowledge-Scope',
+    'X-RAG-Scope',
+    'X-Scope',
+]
+
+
 def _resolve_cors_origins(config: Dict[str, Any]) -> Union[List[str], str]:
     cors_config = config.get('cors', {})
     configured_origins = cors_config.get('origins')
@@ -31,6 +40,37 @@ def _resolve_cors_origins(config: Dict[str, Any]) -> Union[List[str], str]:
     return '*'
 
 
+def _resolve_cors_allow_headers(config: Dict[str, Any]) -> List[str]:
+    cors_config = config.get('cors', {})
+    configured_headers = cors_config.get('allow_headers')
+
+    merged_headers: List[str] = []
+    seen = set()
+
+    def _add(header: Any) -> None:
+        normalized = str(header or '').strip()
+        if not normalized:
+            return
+        lowered = normalized.lower()
+        if lowered in seen:
+            return
+        seen.add(lowered)
+        merged_headers.append(normalized)
+
+    for header in DEFAULT_CORS_ALLOW_HEADERS:
+        _add(header)
+
+    if isinstance(configured_headers, str):
+        items = [item.strip() for item in configured_headers.split(',')]
+        for item in items:
+            _add(item)
+    elif isinstance(configured_headers, list):
+        for item in configured_headers:
+            _add(item)
+
+    return merged_headers
+
+
 def create_app() -> Flask:
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     frontend_dist_dir = os.path.join(base_dir, 'frontend', 'dist')
@@ -44,7 +84,7 @@ def create_app() -> Flask:
         app,
         resources={r"/*": {"origins": _resolve_cors_origins(config)}},
         supports_credentials=bool(cors_config.get('supports_credentials', False)),
-        allow_headers=cors_config.get('allow_headers', ['Content-Type', 'Authorization']),
+        allow_headers=_resolve_cors_allow_headers(config),
         methods=cors_config.get('methods', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']),
     )
 

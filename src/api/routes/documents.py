@@ -3,6 +3,7 @@ import os
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 
+from src.api.routes.scope_utils import extract_scope_from_request
 from src.api.services.rag_service import RAGService
 
 
@@ -21,6 +22,11 @@ def _to_bool(value, default=False):
     return default
 
 
+def _get_scoped_processor(service: RAGService, json_data=None):
+    scope = extract_scope_from_request(request, json_data=json_data)
+    return service.get_processor(scope=scope)
+
+
 @documents_bp.route('/documents', methods=['GET'])
 def list_documents():
     try:
@@ -29,7 +35,7 @@ def list_documents():
         include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         documents = rag_processor.list_documents(doc_type=doc_type, keyword=keyword, include_deleted=include_deleted)
         return jsonify({
@@ -37,6 +43,8 @@ def list_documents():
             "count": len(documents),
             "documents": documents
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取文档列表失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -49,7 +57,7 @@ def list_regulation_groups():
         include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         groups = rag_processor.list_regulation_groups(keyword=keyword, include_deleted=include_deleted)
         return jsonify({
@@ -57,6 +65,8 @@ def list_regulation_groups():
             "count": len(groups),
             "groups": groups,
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取制度分组失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -68,7 +78,7 @@ def list_regulation_group_versions(group_id):
         include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         versions = rag_processor.list_regulation_versions(group_id=group_id, include_deleted=include_deleted)
         return jsonify({
@@ -77,6 +87,8 @@ def list_regulation_group_versions(group_id):
             "count": len(versions),
             "versions": versions,
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取制度版本列表失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -97,7 +109,7 @@ def compare_regulation_versions():
             limit = 500
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service, json_data=data)
 
         # 支持仅传 group_id 自动比较最新两个版本（最新 vs 次新）
         if group_id and (not left_doc_id or not right_doc_id):
@@ -132,9 +144,11 @@ def compare_regulation_versions():
 def clear_all_documents():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
         result = rag_processor.clear_all_documents()
         return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("清空所有文档失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -144,7 +158,7 @@ def clear_all_documents():
 def get_document_detail(doc_id):
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         detail = rag_processor.get_document_detail(doc_id)
         if not detail:
@@ -154,6 +168,8 @@ def get_document_detail(doc_id):
             "success": True,
             "document": detail
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取文档详情失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -167,7 +183,7 @@ def get_document_detail_by_filename():
             return jsonify({"error": "缺少filename参数"}), 400
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         detail = rag_processor.get_document_detail_by_filename(filename)
         if not detail:
@@ -177,6 +193,8 @@ def get_document_detail_by_filename():
             "success": True,
             "document": detail
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("按文件名获取文档详情失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -192,7 +210,7 @@ def get_document_id_by_filename():
         include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
 
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         result = rag_processor.get_document_id_by_filename(filename, include_deleted=include_deleted)
         if not result:
@@ -202,6 +220,8 @@ def get_document_id_by_filename():
             "success": True,
             "data": result
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("按文件名获取文档ID失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -211,13 +231,15 @@ def get_document_id_by_filename():
 def delete_document(doc_id):
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         result = rag_processor.delete_document(doc_id)
         if not result['success']:
             return jsonify(result), 404
 
         return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("删除文档失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -227,7 +249,7 @@ def delete_document(doc_id):
 def get_document_chunks(doc_id):
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         include_text = request.args.get('include_text', 'true').lower() == 'true'
         result = rag_processor.get_document_chunks(doc_id, include_text=include_text)
@@ -239,6 +261,8 @@ def get_document_chunks(doc_id):
             "success": True,
             "data": result
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取分块列表失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -248,7 +272,7 @@ def get_document_chunks(doc_id):
 def get_document_raw(doc_id):
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         detail = rag_processor.get_document_detail(doc_id)
         if not detail:
@@ -285,6 +309,8 @@ def get_document_raw(doc_id):
             download_name=detail.get("filename") or os.path.basename(resolved_path),
             conditional=True,
         )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取原始文件失败: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -294,13 +320,15 @@ def get_document_raw(doc_id):
 def get_document_stats():
     try:
         service: RAGService = current_app.extensions['rag_service']
-        rag_processor = service.get_processor()
+        rag_processor = _get_scoped_processor(service)
 
         stats = rag_processor.get_document_stats()
         return jsonify({
             "success": True,
             "stats": stats
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         current_app.logger.error("获取统计信息失败: %s", e)
         return jsonify({"error": str(e)}), 500

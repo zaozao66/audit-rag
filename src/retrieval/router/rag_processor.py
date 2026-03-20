@@ -57,8 +57,15 @@ class RAGProcessor:
         chunker_type: str = "default",
         rerank_provider: RerankProvider = None,
         llm_provider: LLMProvider = None,
+        scope: str = "default",
+        intent_router_enabled: bool = True,
+        intent_router_default_intent: str = "comprehensive_query",
+        intent_router_fixed_top_k: Optional[int] = None,
+        intent_router_fixed_doc_types: Optional[List[str]] = None,
+        intent_router_default_retrieval_plan: Optional[Dict[str, Any]] = None,
     ):
         self.embedding_provider = embedding_provider
+        self.scope = str(scope or "default")
         self.chunker_type = chunker_type
         self.vector_store_path = vector_store_path
         self.rerank_provider = rerank_provider
@@ -68,7 +75,14 @@ class RAGProcessor:
         self.vector_store: Optional[VectorStore] = None
         self.dimension: Optional[int] = None
 
-        self.router = IntentRouter(llm_provider)
+        self.router = IntentRouter(
+            llm_provider=llm_provider,
+            enabled=intent_router_enabled,
+            default_intent=intent_router_default_intent,
+            fixed_top_k=intent_router_fixed_top_k,
+            fixed_doc_types=intent_router_fixed_doc_types,
+            default_retrieval_plan=intent_router_default_retrieval_plan,
+        )
         self.retriever: Optional[VectorRetriever] = None
 
         self.graph_store = GraphStore()
@@ -78,9 +92,11 @@ class RAGProcessor:
         self.metadata_store = DocumentMetadataStore(storage_path=metadata_path)
 
         logger.info(
-            "RAG处理器初始化完成，重排序功能%s，LLM功能%s",
+            "RAG处理器初始化完成，scope=%s，重排序功能%s，LLM功能%s，意图识别%s",
+            self.scope,
             "启用" if rerank_provider else "禁用",
             "启用" if llm_provider else "禁用",
+            "启用" if intent_router_enabled else "禁用",
         )
 
     def _init_chunker(self, chunker_type, chunk_size, overlap):
