@@ -1,6 +1,7 @@
 import os
 import logging
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Set
 from docx import Document
 import pdfplumber
 import chardet
@@ -68,6 +69,9 @@ class DocumentProcessor:
         
         try:
             with pdfplumber.open(file_path) as pdf:
+                # 普通模式下先收集每页文本，统一做“重复页眉页脚/页码”清洗
+                normal_mode_pages: List[List[str]] = []
+
                 for page_num, page in enumerate(pdf.pages):
                     page_tag = f"[[PAGE:{page_num + 1}]]"
                     if is_audit_issue:
@@ -115,8 +119,21 @@ class DocumentProcessor:
                         # 普通模式：直接提取文本
                         page_text = page.extract_text()
                         if page_text:
-                            text_parts.append(f"{page_tag}\n{page_text}")
+                            lines = DocumentProcessor._normalize_pdf_lines(page_text.splitlines())
+                            normal_mode_pages.append(lines)
+                        else:
+                            normal_mode_pages.append([])
                     logger.debug(f"处理PDF第 {page_num + 1} 页")
+
+                if not is_audit_issue:
+                    repeated_header_footer = DocumentProcessor._detect_repeated_header_footer_lines(normal_mode_pages)
+                    for page_num, lines in enumerate(normal_mode_pages):
+                        page_tag = f"[[PAGE:{page_num + 1}]]"
+                        cleaned_lines = DocumentProcessor._clean_pdf_page_lines(lines, repeated_header_footer)
+                        if cleaned_lines:
+                            text_parts.append(f"{page_tag}\n" + "\n".join(cleaned_lines))
+                        else:
+                            text_parts.append(page_tag)
             
             full_text = "\n".join(text_parts)
             logger.info(f"PDF文档加载完成，总内容长度: {len(full_text)}")
@@ -125,6 +142,126 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"加载PDF文档失败: {e}")
             raise
+
+    @staticmethod
+    def _normalize_pdf_lines(lines: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for line in lines:
+            cleaned = re.sub(r"\s+", " ", str(line or "")).strip()
+            if cleaned:
+                normalized.append(cleaned)
+        return normalized
+
+    @staticmethod
+    def _looks_like_page_number_line(line: str) -> bool:
+        value = str(line or "").strip()
+        if not value:
+            return False
+
+        patterns = [
+            r"^\d{1,4}$",                     # 12
+            r"^[-—_]\s*\d{1,4}\s*[-—_]$",     # - 12 -
+            r"^第\s*\d{1,4}\s*页$",            # 第12页
+            r"^page\s*\d{1,4}$",              # page 12
+            r"^\d{1,4}\s*/\s*\d{1,4}$",       # 12/100
+        ]
+        lowered = value.lower()
+        return any(re.match(pattern, lowered) for pattern in patterns)
+
+    @staticmethod
+    def _looks_like_structural_heading(line: str) -> bool:
+        value = str(line or "").strip()
+        if not value:
+            return False
+
+        return bool(
+            re.match(r"^第[一二三四五六七八九十百千万零〇\d]+[章节条]", value)
+            or re.match(r"^[一二三四五六七八九十]+、", value)
+            or re.match(r"^[（(][一二三四五六七八九十\d]+[）)]", value)
+            or re.match(r"^\d+[.、）)]", value)
+        )
+
+    @staticmethod
+    def _detect_repeated_header_footer_lines(pages_lines: List[List[str]]) -> Set[str]:
+        if not pages_lines:
+            return set()
+
+        page_count = len(pages_lines)
+        if page_count < 3:
+            return set()
+
+        line_page_hits: Dict[str, int] = {}
+        for lines in pages_lines:
+            # 仅统计每页前后几行，避免误删正文中重复短句
+            candidates = lines[:4] + lines[-4:] if len(lines) > 8 else lines
+            seen_in_page = set(candidates)
+            for line in seen_in_page:
+                line_page_hits[line] = line_page_hits.get(line, 0) + 1
+
+        threshold = max(3, int(page_count * 0.45))
+        repeated = set()
+        for line, hits in line_page_hits.items():
+            if hits < threshold:
+                continue
+            if len(line) > 24:
+                continue
+            if DocumentProcessor._looks_like_page_number_line(line):
+                repeated.add(line)
+                continue
+            # 保护章/节/条等目录型标题
+            if DocumentProcessor._looks_like_structural_heading(line):
+                continue
+            repeated.add(line)
+
+        return repeated
+
+    @staticmethod
+    def _should_merge_pdf_lines(prev_line: str, curr_line: str) -> bool:
+        prev = str(prev_line or "").strip()
+        curr = str(curr_line or "").strip()
+        if not prev or not curr:
+            return False
+
+        # 新段落/新标题通常不合并
+        if DocumentProcessor._looks_like_structural_heading(curr):
+            return False
+        if DocumentProcessor._looks_like_page_number_line(curr):
+            return False
+
+        # 句号等终止符结尾，倾向新句新行
+        if re.search(r"[。！？!?；;：:]$", prev):
+            return False
+
+        # 如果上一行明显是标题，避免把正文拼到标题行
+        if DocumentProcessor._looks_like_structural_heading(prev):
+            return False
+
+        # 其余情况默认合并，可显著减少“同一句被拆成两行”
+        return True
+
+    @staticmethod
+    def _clean_pdf_page_lines(lines: List[str], repeated_header_footer: Set[str]) -> List[str]:
+        filtered: List[str] = []
+        for line in lines:
+            if line in repeated_header_footer:
+                continue
+            if DocumentProcessor._looks_like_page_number_line(line):
+                continue
+            filtered.append(line)
+
+        if not filtered:
+            return []
+
+        merged: List[str] = []
+        for line in filtered:
+            if not merged:
+                merged.append(line)
+                continue
+            if DocumentProcessor._should_merge_pdf_lines(merged[-1], line):
+                merged[-1] = f"{merged[-1]}{line}"
+            else:
+                merged.append(line)
+        return merged
     
     @staticmethod
     def _load_docx(file_path: str) -> str:

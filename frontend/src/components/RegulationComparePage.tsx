@@ -1,21 +1,43 @@
 import { ArrowLeftOutlined, SyncOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Checkbox, Col, Empty, Input, Layout, List, Row, Select, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Empty, Input, Layout, List, Row, Select, Space, Spin, Typography } from 'antd';
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { compareRegulationVersions, listRegulationGroupVersions } from '../api/rag';
-import type { DocumentRecord, RegulationCompareItem, RegulationCompareResult } from '../types/rag';
+import { compareRegulationVersions, getDocumentChunks, listRegulationGroupVersions } from '../api/rag';
+import type { DocumentCatalogItem, DocumentRecord, RegulationCompareItem, RegulationCompareResult } from '../types/rag';
 
 const { Header, Content } = Layout;
 
-function statusColor(status: string) {
-  if (status === 'added') return 'green';
-  if (status === 'removed') return 'red';
-  return 'default';
-}
-
 function versionLabelOf(doc: DocumentRecord) {
   return doc.version_label || doc.upload_time || doc.filename || doc.doc_id;
+}
+
+function normalizeCatalogText(input: string) {
+  return String(input || '')
+    .replace(/\s+/g, '')
+    .replace(/[·•●,，。:：;；、“”‘’"'（）()《》【】\[\]<>]/g, '')
+    .toLowerCase();
+}
+
+function getFirstLine(text: string) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || '';
+}
+
+function formatArticleDisplayText(articleNo: string) {
+  const value = String(articleNo || '').trim();
+  if (!value) return '（未命名条目）';
+  if (value.startsWith('section:')) {
+    return value.slice('section:'.length) || '（未命名条目）';
+  }
+  return value;
+}
+
+function getCatalogLevel(item: DocumentCatalogItem) {
+  const level = Number(item.level);
+  return Number.isFinite(level) && level > 0 ? level : 1;
 }
 
 export function RegulationComparePage() {
@@ -31,9 +53,11 @@ export function RegulationComparePage() {
   const [leftDocId, setLeftDocId] = useState('');
   const [rightDocId, setRightDocId] = useState('');
   const [keyword, setKeyword] = useState('');
-  const [includeUnchanged, setIncludeUnchanged] = useState(true);
   const [result, setResult] = useState<RegulationCompareResult | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [rightCatalog, setRightCatalog] = useState<DocumentCatalogItem[]>([]);
   const [activeCatalogId, setActiveCatalogId] = useState('');
+  const [activeArticleKey, setActiveArticleKey] = useState('');
 
   const leftRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const rightRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -89,7 +113,7 @@ export function RegulationComparePage() {
       const response = await compareRegulationVersions({
         leftDocId: left,
         rightDocId: right,
-        includeUnchanged,
+        includeUnchanged: true,
         keyword,
         limit: 1200
       });
@@ -108,21 +132,164 @@ export function RegulationComparePage() {
   }, [leftDocId, rightDocId]);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadCatalog = async () => {
+      if (!rightDocId) {
+        setRightCatalog([]);
+        return;
+      }
+      setCatalogLoading(true);
+      try {
+        const response = await getDocumentChunks(rightDocId, false);
+        if (!cancelled) {
+          setRightCatalog(response.data?.catalog || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setRightCatalog([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setCatalogLoading(false);
+        }
+      }
+    };
+
+    void loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [rightDocId]);
+
+  useEffect(() => {
     leftRefs.current = {};
     rightRefs.current = {};
-    const firstId = result?.diffs?.[0]?.article_key || '';
-    setActiveCatalogId(firstId);
-  }, [result]);
+    const firstCatalog = rightCatalog[0]?.id || '';
+    const firstArticle = result?.diffs?.[0]?.article_key || '';
+    setActiveCatalogId(firstCatalog);
+    setActiveArticleKey(firstArticle);
+  }, [result, rightCatalog]);
 
-  const catalogItems = useMemo(() => result?.diffs || [], [result]);
+  const compareItems = useMemo(() => result?.diffs || [], [result]);
 
-  const jumpToArticle = (item: RegulationCompareItem) => {
-    const articleKey = String(item.article_key || '');
+  const compareByKey = useMemo(() => {
+    const map = new Map<string, RegulationCompareItem>();
+    compareItems.forEach((item) => {
+      map.set(item.article_key, item);
+    });
+    return map;
+  }, [compareItems]);
+
+  const rightChunkToArticleKey = useMemo(() => {
+    const map = new Map<string, string>();
+    compareItems.forEach((item) => {
+      (item.new_chunk_ids || []).forEach((chunkId) => {
+        const key = String(chunkId || '').trim();
+        if (key && !map.has(key)) {
+          map.set(key, item.article_key);
+        }
+      });
+    });
+    return map;
+  }, [compareItems]);
+
+  const titleToArticleKey = useMemo(() => {
+    const map = new Map<string, string>();
+    compareItems.forEach((item) => {
+      const candidates = [
+        item.article_no,
+        getFirstLine(item.new_text),
+        getFirstLine(item.old_text),
+        item.article_key.startsWith('section:') ? item.article_key.slice('section:'.length) : item.article_key
+      ];
+      candidates.forEach((candidate) => {
+        const normalized = normalizeCatalogText(candidate);
+        if (normalized && !map.has(normalized)) {
+          map.set(normalized, item.article_key);
+        }
+      });
+    });
+    return map;
+  }, [compareItems]);
+
+  const firstCatalogIdByArticleKey = useMemo(() => {
+    const map = new Map<string, string>();
+    rightCatalog.forEach((catalog) => {
+      const articleKey = rightChunkToArticleKey.get(String(catalog.chunk_id || '').trim());
+      if (articleKey && !map.has(articleKey)) {
+        map.set(articleKey, catalog.id);
+      }
+    });
+    return map;
+  }, [rightCatalog, rightChunkToArticleKey]);
+
+  const resolveArticleKeyForCatalog = (catalog: DocumentCatalogItem) => {
+    const byChunk = rightChunkToArticleKey.get(String(catalog.chunk_id || '').trim());
+    if (byChunk) return byChunk;
+    const byTitle = titleToArticleKey.get(normalizeCatalogText(catalog.title));
+    return byTitle || '';
+  };
+
+  const catalogIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    rightCatalog.forEach((item, index) => {
+      map.set(item.id, index);
+    });
+    return map;
+  }, [rightCatalog]);
+
+  const findFirstDescendantArticleKey = (parentIndex: number) => {
+    if (parentIndex < 0 || parentIndex >= rightCatalog.length) return '';
+    const parentLevel = getCatalogLevel(rightCatalog[parentIndex]);
+    for (let idx = parentIndex + 1; idx < rightCatalog.length; idx += 1) {
+      const item = rightCatalog[idx];
+      const level = getCatalogLevel(item);
+      if (level <= parentLevel) break;
+      const articleKey = resolveArticleKeyForCatalog(item);
+      if (articleKey) return articleKey;
+    }
+    return '';
+  };
+
+  const jumpByCatalog = (catalog: DocumentCatalogItem) => {
+    setActiveCatalogId(catalog.id);
+    const currentIndex = catalogIndexMap.get(catalog.id) ?? -1;
+    const hasDescendant = currentIndex >= 0
+      && currentIndex + 1 < rightCatalog.length
+      && getCatalogLevel(rightCatalog[currentIndex + 1]) > getCatalogLevel(catalog);
+
+    let articleKey = '';
+    if (hasDescendant) {
+      articleKey = findFirstDescendantArticleKey(currentIndex);
+      if (!articleKey) {
+        articleKey = resolveArticleKeyForCatalog(catalog);
+      }
+    } else {
+      articleKey = resolveArticleKeyForCatalog(catalog);
+      if (!articleKey) {
+        articleKey = findFirstDescendantArticleKey(currentIndex);
+      }
+    }
     if (!articleKey) return;
 
-    leftRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    rightRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setActiveCatalogId(articleKey);
+    const entry = compareByKey.get(articleKey);
+    if (!entry) return;
+
+    if (String(entry.old_text || '').trim()) {
+      leftRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    if (String(entry.new_text || '').trim()) {
+      rightRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setActiveArticleKey(articleKey);
+  };
+
+  const onEntryClick = (articleKey: string) => {
+    setActiveArticleKey(articleKey);
+    const catalogId = firstCatalogIdByArticleKey.get(articleKey);
+    if (catalogId) {
+      setActiveCatalogId(catalogId);
+    }
   };
 
   const groupName = useMemo(
@@ -166,9 +333,6 @@ export function RegulationComparePage() {
               onChange={(e: ChangeEvent<HTMLInputElement>) => setKeyword(e.target.value)}
               placeholder="关键词过滤（可选）"
             />
-            <Checkbox checked={includeUnchanged} onChange={(e) => setIncludeUnchanged(e.target.checked)}>
-              包含未变化条款
-            </Checkbox>
             <Button
               type="primary"
               icon={<SyncOutlined />}
@@ -191,63 +355,52 @@ export function RegulationComparePage() {
         ) : (
           <Card
             className="app-card"
-            title={`对比结果：返回 ${result.returned_count}/${result.filtered_count} 条`}
-            extra={(
-              <Space wrap size={8}>
-                <Tag color="green">新增 {result.summary.added}</Tag>
-                <Tag color="red">删除 {result.summary.removed}</Tag>
-                <Tag color="gold">修改 {result.summary.modified}</Tag>
-                <Tag>未变化 {result.summary.unchanged}</Tag>
-                {result.truncated ? <Tag color="orange">结果已截断</Tag> : null}
-              </Space>
-            )}
+            title={`对比目录：共 ${result.returned_count} 条${result.truncated ? '（结果已截断）' : ''}`}
           >
-            {!includeUnchanged ? (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 10 }}
-                message={`当前为“仅看变化”模式，已隐藏 ${result.summary.unchanged} 条未变化条款。勾选“包含未变化条款”可查看完整条款（例如第八条）。`}
-              />
-            ) : null}
-            {catalogItems.length === 0 ? (
+            {compareItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无匹配差异" />
             ) : (
               <Row gutter={12} className="compare-main-row">
                 <Col xs={24} lg={5}>
                   <div className="catalog-scroll compare-catalog-scroll">
-                    <List
-                      size="small"
-                      dataSource={catalogItems}
-                      renderItem={(item) => (
-                        <List.Item
-                          className={`catalog-item ${activeCatalogId === item.article_key ? 'active' : ''}`}
-                          onClick={() => jumpToArticle(item)}
-                        >
-                          <div className="catalog-row">
-                            <Typography.Text ellipsis>{item.article_no}</Typography.Text>
-                            {item.status !== 'modified' ? <Tag color={statusColor(item.status)}>{item.status}</Tag> : null}
-                          </div>
-                        </List.Item>
-                      )}
-                    />
+                    {catalogLoading ? (
+                      <div className="doc-preview-loading"><Spin /></div>
+                    ) : (
+                      <List
+                        size="small"
+                        dataSource={rightCatalog}
+                        renderItem={(catalog) => (
+                          <List.Item
+                            className={`catalog-item ${activeCatalogId === catalog.id ? 'active' : ''}`}
+                            onClick={() => jumpByCatalog(catalog)}
+                            style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
+                          >
+                            <div className="catalog-row">
+                            <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                              <Typography.Text type="secondary" className="catalog-line-no">
+                                {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
+                              </Typography.Text>
+                            </div>
+                          </List.Item>
+                        )}
+                      />
+                    )}
                   </div>
                 </Col>
                 <Col xs={24} lg={9}>
                   <Card size="small" title={`旧版本：${leftVersion ? versionLabelOf(leftVersion) : leftDocId}`} className="compare-pane-card">
                     <div className="compare-pane-scroll">
-                      {catalogItems.map((item) => (
+                      {compareItems.map((item) => (
                         <div
                           key={`left-${item.article_key}`}
                           ref={(el) => {
                             leftRefs.current[item.article_key] = el;
                           }}
-                          className={`compare-entry ${activeCatalogId === item.article_key ? 'active' : ''}`}
-                          onClick={() => setActiveCatalogId(item.article_key)}
+                          className={`compare-entry ${activeArticleKey === item.article_key ? 'active' : ''}`}
+                          onClick={() => onEntryClick(item.article_key)}
                         >
                           <Space wrap size={8} style={{ marginBottom: 6 }}>
-                            <Typography.Text strong>{item.article_no}</Typography.Text>
-                            {item.status !== 'modified' ? <Tag color={statusColor(item.status)}>{item.status}</Tag> : null}
+                            <Typography.Text strong>{formatArticleDisplayText(item.article_no)}</Typography.Text>
                           </Space>
                           <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
                             {item.old_text || '（本版本无该条）'}
@@ -260,18 +413,17 @@ export function RegulationComparePage() {
                 <Col xs={24} lg={10}>
                   <Card size="small" title={`新版本：${rightVersion ? versionLabelOf(rightVersion) : rightDocId}`} className="compare-pane-card">
                     <div className="compare-pane-scroll">
-                      {catalogItems.map((item) => (
+                      {compareItems.map((item) => (
                         <div
                           key={`right-${item.article_key}`}
                           ref={(el) => {
                             rightRefs.current[item.article_key] = el;
                           }}
-                          className={`compare-entry ${activeCatalogId === item.article_key ? 'active' : ''}`}
-                          onClick={() => setActiveCatalogId(item.article_key)}
+                          className={`compare-entry ${activeArticleKey === item.article_key ? 'active' : ''}`}
+                          onClick={() => onEntryClick(item.article_key)}
                         >
                           <Space wrap size={8} style={{ marginBottom: 6 }}>
-                            <Typography.Text strong>{item.article_no}</Typography.Text>
-                            {item.status !== 'modified' ? <Tag color={statusColor(item.status)}>{item.status}</Tag> : null}
+                            <Typography.Text strong>{formatArticleDisplayText(item.article_no)}</Typography.Text>
                           </Space>
                           <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
                             {item.new_text || '（本版本无该条）'}

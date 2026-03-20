@@ -2192,13 +2192,21 @@ class RAGProcessor:
         right_entries = self._build_article_entries_from_chunks(right_chunks)
         all_keys = list(set(left_entries.keys()) | set(right_entries.keys()))
 
-        def _entry_sort_key(key: str) -> Tuple[int, int, str]:
-            candidate = right_entries.get(key) or left_entries.get(key) or {}
-            article_number = candidate.get("article_number")
-            order = int(candidate.get("order", 999999) or 999999)
-            if isinstance(article_number, int):
-                return (0, article_number, key)
-            return (1, order, key)
+        def _safe_order(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 999999
+
+        def _entry_sort_key(key: str) -> Tuple[int, int, int, str]:
+            # 对比目录顺序与全屏预览保持一致：优先按右侧（新版本）原始目录顺序。
+            right_item = right_entries.get(key)
+            left_item = left_entries.get(key)
+            right_order = _safe_order((right_item or {}).get("order", 999999))
+            left_order = _safe_order((left_item or {}).get("order", 999999))
+            if right_item:
+                return (0, right_order, left_order, key)
+            return (1, left_order, right_order, key)
 
         sorted_keys = sorted(all_keys, key=_entry_sort_key)
         lowered_keyword = str(keyword or "").strip().lower()
