@@ -378,6 +378,28 @@ body {
   font-size: 12px;
 }
 
+.chat-speech {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #eef2f8;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fcfdff;
+}
+
+.chat-speech-controls {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.chat-speech-status {
+  font-size: 12px;
+}
+
+.chat-speech-error {
+  font-size: 12px;
+}
+
 .chat-citations {
   border-top: 1px solid #eef2f8;
   padding-top: 8px;

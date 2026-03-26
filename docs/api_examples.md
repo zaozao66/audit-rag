@@ -25,6 +25,11 @@
 - `POST /search_with_intent` - 意图识别搜索
 - `POST /ask` - 非流式LLM问答
 - `POST /v1/chat/completions` - OpenAI兼容问答（支持流式）
+- `POST /v1/speech/scripts` - 播报文案生成
+- `POST /v1/audio/speech` - 音频合成（URL/二进制）
+- `POST /v1/audio/speech/realtime` - 实时TTS（SSE流）
+- `GET  /v1/audio/files/<file_name>` - 音频文件回放
+- `POST /v1/audio/transcriptions` - STT接口预留（当前返回501）
 - `POST /clear` - 清空向量库
 - `GET  /info` - 系统信息
 - `GET  /documents` - 文档列表
@@ -150,7 +155,98 @@ curl -X POST http://localhost:8000/clear \
   -H "X-Knowledge-Scope: discipline"
 ```
 
-### 6. 获取系统信息
+### 6. 语音播报文案生成
+
+```bash
+curl -X POST http://localhost:8000/v1/speech/scripts \
+  -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: discipline" \
+  -d '{
+    "text": "纪律处分条例适用于党组织和党员，重点约束违纪行为并对应处分措施。",
+    "style": "brief"
+  }'
+```
+
+响应示例：
+```json
+{
+  "id": "spk_33ca535f370e",
+  "speech_text": "纪律处分条例适用于党组织和党员，重点约束违纪行为并对应处分措施。",
+  "style": "brief",
+  "fallback_used": true
+}
+```
+
+### 7. 音频合成（非实时）
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: discipline" \
+  -d '{
+    "input": "纪律处分条例适用于党组织和党员。",
+    "model": "qwen3-tts-flash-2025-11-27",
+    "voice": "Cherry",
+    "format": "wav",
+    "response_mode": "url"
+  }'
+```
+
+响应示例：
+```json
+{
+  "id": "aud_962fa5de0ad8",
+  "object": "audio.speech",
+  "created": 1774233768,
+  "provider": "qwen",
+  "model": "qwen3-tts-flash-2025-11-27",
+  "voice": "Cherry",
+  "format": "wav",
+  "sample_rate": 24000,
+  "audio_url": "/v1/audio/files/discipline__6c6f05f2.wav",
+  "file_name": "discipline__6c6f05f2.wav",
+  "cache_hit": false,
+  "size_bytes": 433964,
+  "duration_ms": null
+}
+```
+
+### 8. 实时TTS（最小版，SSE）
+
+```bash
+curl -N -X POST http://localhost:8000/v1/audio/speech/realtime \
+  -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: discipline" \
+  -d '{
+    "input": "纪律处分条例适用范围是什么",
+    "model": "qwen3-tts-flash-realtime-2025-11-27",
+    "voice": "Cherry",
+    "sample_rate": 24000,
+    "mode": "server_commit",
+    "debug": true,
+    "response_mode": "sse"
+  }'
+```
+
+返回说明：
+- `event: realtime.start`：实时任务开始
+- `event: audio.delta`：音频分片（`delta` 为 base64 PCM）
+- `event: realtime.debug`：调试事件（当 `debug=true`）
+- `event: audio.done`：完成并返回缓存音频URL
+- `[DONE]`：SSE结束
+
+前端联调说明：
+- 对话页顶部提供 `Realtime调试` 开关（Switch）
+- 开启后，回答卡片点击“播报”会优先走实时接口并展示调试日志
+- 关闭后恢复非实时 `/v1/audio/speech` 播放模式
+
+### 9. 播放缓存音频文件
+
+```bash
+curl -X GET "http://localhost:8000/v1/audio/files/discipline__6c6f05f2.wav" --output speech.wav
+```
+
+### 10. 获取系统信息
 
 ```bash
 curl -X GET http://localhost:8000/info
@@ -191,7 +287,7 @@ curl -X GET http://localhost:8000/info \
 }
 ```
 
-### 7. 上传文件并入库（带去重统计）
+### 11. 上传文件并入库（带去重统计）
 
 ```bash
 curl -X POST http://localhost:8000/upload_store \
@@ -216,37 +312,37 @@ curl -X POST http://localhost:8000/upload_store \
 }
 ```
 
-### 8. 获取文档列表
+### 12. 获取文档列表
 
 ```bash
 curl -X GET "http://localhost:8000/documents?doc_type=internal_regulation&keyword=制度&include_deleted=false"
 ```
 
-### 9. 获取单个文档详情
+### 13. 获取单个文档详情
 
 ```bash
 curl -X GET http://localhost:8000/documents/2f6ab1d2f10c1f8a
 ```
 
-### 10. 获取文档分块
+### 14. 获取文档分块
 
 ```bash
 curl -X GET "http://localhost:8000/documents/2f6ab1d2f10c1f8a/chunks?include_text=false"
 ```
 
-### 11. 删除文档
+### 15. 删除文档
 
 ```bash
 curl -X DELETE http://localhost:8000/documents/2f6ab1d2f10c1f8a
 ```
 
-### 12. 获取文档统计
+### 16. 获取文档统计
 
 ```bash
 curl -X GET http://localhost:8000/documents/stats
 ```
 
-### 13. 清空全部文档（真实删除）
+### 17. 清空全部文档（真实删除）
 
 ```bash
 curl -X DELETE http://localhost:8000/documents
@@ -284,3 +380,5 @@ API在遇到错误时会返回适当的HTTP状态码和错误信息：
 2. 文档文本应避免过长，建议单个文档不超过一定字符限制
 3. 搜索的 `top_k` 参数控制返回结果数量，默认为5
 4. API服务器默认监听在 `0.0.0.0:8000`
+5. 实时TTS依赖 `websocket-client>=1.8.0`，需先安装依赖并重启服务
+6. `qwen3-tts-flash-realtime-2025-11-27` 仅用于实时接口 `/v1/audio/speech/realtime`

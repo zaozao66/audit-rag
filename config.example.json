@@ -38,6 +38,41 @@
       "max_messages": 24,
       "ttl_minutes": 120
     },
+    "audio": {
+      "script": {
+        "max_chars": 1200
+      },
+      "tts": {
+        "provider": "qwen",
+        "model": "qwen3-tts-flash-2025-11-27",
+        "default_voice": "Cherry",
+        "default_format": "mp3",
+        "default_sample_rate": 24000,
+        "request_timeout": 20,
+        "ssl_verify": true,
+        "output_dir": "./data/audio_cache",
+        "public_base_path": "/v1/audio/files",
+        "cache_ttl_hours": 48,
+        "cache_max_disk_mb": 2048,
+        "providers": {
+          "qwen": {
+            "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "YOUR_DEVELOPMENT_API_KEY_HERE",
+            "model": "qwen3-tts-flash-2025-11-27"
+          },
+          "cosyvoice": {
+            "endpoint": "http://cosyvoice-internal:9880",
+            "path": "/tts",
+            "default_voice": "default"
+          },
+          "melotts": {
+            "endpoint": "http://melotts-internal:5000",
+            "path": "/tts",
+            "default_voice": "default"
+          }
+        }
+      }
+    },
     "default_scope": "audit",
     "scope_required": false,
     "knowledge_scopes": {
@@ -112,6 +147,41 @@
     "conversation": {
       "max_messages": 24,
       "ttl_minutes": 120
+    },
+    "audio": {
+      "script": {
+        "max_chars": 1200
+      },
+      "tts": {
+        "provider": "qwen",
+        "model": "qwen3-tts-flash-2025-11-27",
+        "default_voice": "Cherry",
+        "default_format": "mp3",
+        "default_sample_rate": 24000,
+        "request_timeout": 20,
+        "ssl_verify": false,
+        "output_dir": "./data/audio_cache",
+        "public_base_path": "/v1/audio/files",
+        "cache_ttl_hours": 48,
+        "cache_max_disk_mb": 2048,
+        "providers": {
+          "qwen": {
+            "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "YOUR_PRODUCTION_API_KEY_HERE",
+            "model": "qwen3-tts-flash-2025-11-27"
+          },
+          "cosyvoice": {
+            "endpoint": "http://cosyvoice-internal:9880",
+            "path": "/tts",
+            "default_voice": "default"
+          },
+          "melotts": {
+            "endpoint": "http://melotts-internal:5000",
+            "path": "/tts",
+            "default_voice": "default"
+          }
+        }
+      }
     },
     "default_scope": "audit",
     "scope_required": false,

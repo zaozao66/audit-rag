@@ -1,8 +1,12 @@
-import { MessageOutlined, ReloadOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { MessageOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, SendOutlined, SoundOutlined, StopOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Empty, Input, Space, Tag, Typography } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
+import { buildSpeechScript, synthesizeSpeech } from '../api/audio';
+import { resolveApiUrl } from '../api/client';
 import { streamAskWithLlm } from '../api/rag';
+import { useSpeechPlayer } from '../hooks/useSpeechPlayer';
+import type { MessageSpeechState, SpeechPlayState } from '../types/audio';
 import type { CitationItem, StreamProgressEvent } from '../types/rag';
 import { renderMarkdownToHtml } from '../utils/markdown';
 
@@ -41,6 +45,15 @@ function scopeLabel(scope: 'audit' | 'discipline') {
   return scope === 'audit' ? '审计' : '纪检';
 }
 
+function speechStateLabel(state: SpeechPlayState) {
+  if (state === 'loading') return '语音生成中';
+  if (state === 'playing') return '播放中';
+  if (state === 'paused') return '已暂停';
+  if (state === 'stopped') return '已停止';
+  if (state === 'error') return '播放失败';
+  return '未播报';
+}
+
 export function SearchPanel({ scope }: SearchPanelProps) {
   const [sessionId, setSessionId] = useState(() => createSessionId());
   const [query, setQuery] = useState('');
@@ -48,6 +61,7 @@ export function SearchPanel({ scope }: SearchPanelProps) {
   const [error, setError] = useState('');
   const [progressText, setProgressText] = useState('等待提问');
   const [activeCitation, setActiveCitation] = useState<ActiveCitationState | null>(null);
+  const [speechStates, setSpeechStates] = useState<Record<string, MessageSpeechState>>({});
   const [chatItems, setChatItems] = useState<ChatItem[]>([
     {
       id: createMessageId(),
@@ -59,6 +73,30 @@ export function SearchPanel({ scope }: SearchPanelProps) {
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const updateSpeechState = useCallback((messageId: string, patch: Partial<MessageSpeechState>) => {
+    setSpeechStates((prev) => ({
+      ...prev,
+      [messageId]: (() => {
+        const current = prev[messageId];
+        const nextState = patch.state || current?.state || 'idle';
+        return {
+          ...(current || {}),
+          ...patch,
+          state: nextState,
+        };
+      })(),
+    }));
+  }, []);
+
+  const onSpeechPlayerStateChange = useCallback((messageId: string, state: SpeechPlayState, playbackError?: string) => {
+    updateSpeechState(messageId, {
+      state,
+      error: playbackError || (state === 'error' ? '音频播放失败' : undefined),
+    });
+  }, [updateSpeechState]);
+
+  const speechPlayer = useSpeechPlayer(onSpeechPlayerStateChange);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -111,6 +149,7 @@ export function SearchPanel({ scope }: SearchPanelProps) {
     const cleanQuery = query.trim();
     if (!cleanQuery || loading) return;
 
+    speechPlayer.stopAll();
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -188,12 +227,80 @@ export function SearchPanel({ scope }: SearchPanelProps) {
     setLoading(false);
   };
 
+  const playSpeech = async (item: ChatItem) => {
+    const content = item.content.trim();
+    if (!content) return;
+
+    const currentState = speechStates[item.id];
+    if (currentState?.audioUrl) {
+      await speechPlayer.playFromUrl(item.id, currentState.audioUrl, true);
+      return;
+    }
+
+    updateSpeechState(item.id, { state: 'loading', error: undefined });
+
+    try {
+      const script = await buildSpeechScript({
+        text: content,
+        style: 'brief',
+        sessionId,
+        messageId: item.id,
+      });
+      const speechText = script.speech_text.trim();
+      updateSpeechState(item.id, { speechText });
+
+      const audio = await synthesizeSpeech({
+        input: speechText,
+        sessionId,
+        messageId: item.id,
+      });
+
+      const audioUrl = resolveApiUrl(audio.audio_url);
+      updateSpeechState(item.id, {
+        audioId: audio.id,
+        audioUrl,
+      });
+      await speechPlayer.playFromUrl(item.id, audioUrl, true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '语音播报失败';
+      updateSpeechState(item.id, { state: 'error', error: message });
+    }
+  };
+
+  const replaySpeech = async (item: ChatItem) => {
+    const speechState = speechStates[item.id];
+    if (speechState?.audioUrl) {
+      await speechPlayer.playFromUrl(item.id, speechState.audioUrl, true);
+      return;
+    }
+    await playSpeech(item);
+  };
+
+  const pauseSpeech = (messageId: string) => {
+    speechPlayer.pause(messageId);
+  };
+
+  const resumeSpeech = async (messageId: string) => {
+    try {
+      await speechPlayer.resume(messageId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '继续播放失败';
+      updateSpeechState(messageId, { state: 'error', error: message });
+    }
+  };
+
+  const stopSpeech = (messageId: string) => {
+    speechPlayer.stop(messageId);
+  };
+
   const resetSession = () => {
     abortRef.current?.abort();
+    speechPlayer.stopAll();
     setLoading(false);
     setError('');
     setProgressText('已创建新会话');
     setSessionId(createSessionId());
+    setSpeechStates({});
     setChatItems([
       {
         id: createMessageId(),
@@ -223,11 +330,68 @@ export function SearchPanel({ scope }: SearchPanelProps) {
             const html = renderMarkdownToHtml(item.content || (item.role === 'assistant' ? '...' : ''), {
               citationAnchorPrefix: anchorPrefix
             });
+            const speechState = speechStates[item.id] || { state: 'idle' };
+            const canPlaySpeech = item.role === 'assistant' && Boolean(item.content.trim());
+            const canPause = speechState.state === 'playing';
+            const canResume = speechState.state === 'paused';
+            const canStopSpeech = speechState.state === 'loading' || speechState.state === 'playing' || speechState.state === 'paused';
 
             return (
               <article key={item.id} className={`chat-bubble ${item.role}`}>
                 <div className="chat-role">{item.role === 'user' ? '你' : '助手'}</div>
                 <div className="chat-content markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+                {item.role === 'assistant' ? (
+                  <div className="chat-speech">
+                    <Space size={8} wrap className="chat-speech-controls">
+                      <Button
+                        size="small"
+                        icon={<SoundOutlined />}
+                        onClick={() => void playSpeech(item)}
+                        loading={speechState.state === 'loading'}
+                        disabled={!canPlaySpeech || speechState.state === 'playing'}
+                      >
+                        播报
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<PauseCircleOutlined />}
+                        onClick={() => pauseSpeech(item.id)}
+                        disabled={!canPause}
+                      >
+                        暂停
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<PlayCircleOutlined />}
+                        onClick={() => void resumeSpeech(item.id)}
+                        disabled={!canResume}
+                      >
+                        继续
+                      </Button>
+                      <Button
+                        size="small"
+                        icon={<StopOutlined />}
+                        onClick={() => stopSpeech(item.id)}
+                        disabled={!canStopSpeech}
+                      >
+                        停止播报
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => void replaySpeech(item)}
+                        disabled={!canPlaySpeech}
+                      >
+                        重播
+                      </Button>
+                    </Space>
+                    <Typography.Text type="secondary" className="chat-speech-status">
+                      播报状态: {speechStateLabel(speechState.state)}
+                    </Typography.Text>
+                    {speechState.error ? (
+                      <Typography.Text type="danger" className="chat-speech-error">{speechState.error}</Typography.Text>
+                    ) : null}
+                  </div>
+                ) : null}
                 {item.progress ? <Typography.Text type="secondary" className="chat-progress">{item.progress}</Typography.Text> : null}
                 {item.error ? <Alert type="error" showIcon message={item.error} /> : null}
                 {item.role === 'assistant' && item.citations.length > 0 ? (

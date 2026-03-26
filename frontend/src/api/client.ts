@@ -9,6 +9,16 @@ export function getCurrentKnowledgeScope(): string {
   return localValue || DEFAULT_SCOPE;
 }
 
+export function resolveApiUrl(pathOrUrl: string): string {
+  const raw = String(pathOrUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) {
+    return `${API_BASE}${raw}`;
+  }
+  return `${API_BASE}/${raw}`;
+}
+
 export function buildScopedHeaders(initHeaders?: HeadersInit): Headers {
   const headers = new Headers(initHeaders || {});
   if (!headers.has('X-Knowledge-Scope')) {

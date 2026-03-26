@@ -3,10 +3,15 @@ from typing import Any, Dict, List, Union
 from flask import Flask
 from flask_cors import CORS
 
+from src.api.routes.audio import audio_bp
 from src.api.routes.chat import chat_bp
 from src.api.routes.documents import documents_bp
 from src.api.routes.storage import storage_bp
 from src.api.routes.system import system_bp
+from src.audio.services.media_store import MediaStore
+from src.audio.services.speech_script_service import SpeechScriptService
+from src.audio.services.tts_service import TTSService
+from src.core.factory import RAGFactory
 from src.api.services.conversation_service import ConversationService
 from src.api.services.rag_service import RAGService
 from src.utils.config_loader import load_config
@@ -73,7 +78,7 @@ def _resolve_cors_allow_headers(config: Dict[str, Any]) -> List[str]:
 
 def create_app() -> Flask:
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    frontend_dist_dir = os.path.join(base_dir, 'frontend', 'dist')
+    frontend_dist_dir = os.path.join(base_dir, 'src', 'api', 'static')
 
     app = Flask(__name__, static_folder=frontend_dist_dir, static_url_path='/')
     app.config['FRONTEND_DIST_DIR'] = frontend_dist_dir
@@ -95,9 +100,35 @@ def create_app() -> Flask:
         ttl_minutes=conv_config.get('ttl_minutes', 120),
     )
 
+    audio_cfg = config.get('audio', {}) if isinstance(config.get('audio'), dict) else {}
+    script_cfg = audio_cfg.get('script', {}) if isinstance(audio_cfg.get('script'), dict) else {}
+    app.extensions['speech_script_service'] = SpeechScriptService(
+        max_chars=script_cfg.get('max_chars', 1200),
+    )
+
+    tts_cfg = audio_cfg.get('tts', {}) if isinstance(audio_cfg.get('tts'), dict) else {}
+    media_store = MediaStore(
+        base_dir=tts_cfg.get('output_dir', './data/audio_cache'),
+        public_base_path=tts_cfg.get('public_base_path', '/v1/audio/files'),
+        ttl_hours=tts_cfg.get('cache_ttl_hours', 48),
+        max_disk_mb=tts_cfg.get('cache_max_disk_mb', 2048),
+    )
+    tts_provider = RAGFactory.create_tts_provider(config)
+    app.extensions['tts_service'] = TTSService(
+        provider=tts_provider,
+        media_store=media_store,
+        provider_name=str(tts_cfg.get('provider', 'qwen')),
+        default_model=str(tts_cfg.get('model', 'qwen3-tts-flash-2025-11-27')),
+        default_voice=str(tts_cfg.get('default_voice', 'Cherry')),
+        default_format=str(tts_cfg.get('default_format', 'mp3')),
+        default_sample_rate=int(tts_cfg.get('default_sample_rate', 24000)),
+        request_timeout=float(tts_cfg.get('request_timeout', 20.0)),
+    )
+
     app.register_blueprint(system_bp)
     app.register_blueprint(storage_bp)
     app.register_blueprint(chat_bp)
+    app.register_blueprint(audio_bp)
     app.register_blueprint(documents_bp)
 
     return app
