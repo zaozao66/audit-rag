@@ -6,6 +6,7 @@ from flask_cors import CORS
 from src.api.routes.audio import audio_bp
 from src.api.routes.chat import chat_bp
 from src.api.routes.documents import documents_bp
+from src.api.routes.ai_proxy import ai_proxy_bp
 from src.api.routes.storage import storage_bp
 from src.api.routes.system import system_bp
 from src.audio.services.media_store import MediaStore
@@ -130,5 +131,6 @@ def create_app() -> Flask:
     app.register_blueprint(chat_bp)
     app.register_blueprint(audio_bp)
     app.register_blueprint(documents_bp)
+    app.register_blueprint(ai_proxy_bp)
 
     return app

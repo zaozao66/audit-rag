@@ -25,6 +25,23 @@
       "max_tokens": 2000,
       "ssl_verify": true
     },
+    "asr_proxy": {
+      "endpoint": "https://your-asr-endpoint.com/v1",
+      "path": "/audio/transcriptions",
+      "api_key": "YOUR_ASR_API_KEY_HERE",
+      "model_name": "qwen3-asr",
+      "request_timeout": 60,
+      "ssl_verify": true
+    },
+    "department_portrait_ai": {
+      "endpoint": "https://your-llm-endpoint.com/v1",
+      "api_key": "YOUR_DEPARTMENT_AI_API_KEY_HERE",
+      "model_name": "GLM-4.7-W8A8",
+      "temperature": 0.3,
+      "max_tokens": 1200,
+      "request_timeout": 60,
+      "ssl_verify": true
+    },
     "chunking": {
       "chunk_size": 512,
       "overlap": 50,
@@ -133,6 +150,23 @@
       "endpoint": "https://api.deepseek.com/v1",
       "temperature": 0.7,
       "max_tokens": 2000,
+      "ssl_verify": false
+    },
+    "asr_proxy": {
+      "endpoint": "https://your-asr-endpoint.com/v1",
+      "path": "/audio/transcriptions",
+      "api_key": "YOUR_ASR_API_KEY_HERE",
+      "model_name": "qwen3-asr",
+      "request_timeout": 60,
+      "ssl_verify": false
+    },
+    "department_portrait_ai": {
+      "endpoint": "https://your-llm-endpoint.com/v1",
+      "api_key": "YOUR_DEPARTMENT_AI_API_KEY_HERE",
+      "model_name": "GLM-4.7-W8A8",
+      "temperature": 0.3,
+      "max_tokens": 1200,
+      "request_timeout": 60,
       "ssl_verify": false
     },
     "chunking": {
