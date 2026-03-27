@@ -7,11 +7,13 @@ from src.api.routes.audio import audio_bp
 from src.api.routes.chat import chat_bp
 from src.api.routes.documents import documents_bp
 from src.api.routes.ai_proxy import ai_proxy_bp
+from src.api.routes.files import files_bp
 from src.api.routes.storage import storage_bp
 from src.api.routes.system import system_bp
 from src.audio.services.media_store import MediaStore
 from src.audio.services.speech_script_service import SpeechScriptService
 from src.audio.services.tts_service import TTSService
+from src.api.services.file_storage_service import UnifiedFileStorageService
 from src.core.factory import RAGFactory
 from src.api.services.conversation_service import ConversationService
 from src.api.services.rag_service import RAGService
@@ -101,6 +103,12 @@ def create_app() -> Flask:
         ttl_minutes=conv_config.get('ttl_minutes', 120),
     )
 
+    storage_cfg = config.get('file_storage', {}) if isinstance(config.get('file_storage'), dict) else {}
+    app.extensions['file_storage_service'] = UnifiedFileStorageService(
+        config=storage_cfg,
+        environment=str(config.get('environment', 'development')),
+    )
+
     audio_cfg = config.get('audio', {}) if isinstance(config.get('audio'), dict) else {}
     script_cfg = audio_cfg.get('script', {}) if isinstance(audio_cfg.get('script'), dict) else {}
     app.extensions['speech_script_service'] = SpeechScriptService(
@@ -127,6 +135,7 @@ def create_app() -> Flask:
     )
 
     app.register_blueprint(system_bp)
+    app.register_blueprint(files_bp)
     app.register_blueprint(storage_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(audio_bp)

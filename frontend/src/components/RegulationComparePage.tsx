@@ -2,8 +2,8 @@ import { ArrowLeftOutlined, SyncOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Col, Empty, Input, Layout, List, Row, Select, Space, Spin, Typography } from 'antd';
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { compareRegulationVersions, getDocumentChunks, listRegulationGroupVersions } from '../api/rag';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { compareRegulationVersions, getDocumentChunks, listDocuments } from '../api/rag';
 import type { DocumentCatalogItem, DocumentRecord, RegulationCompareItem, RegulationCompareResult } from '../types/rag';
 
 const { Header, Content } = Layout;
@@ -40,43 +40,48 @@ function getCatalogLevel(item: DocumentCatalogItem) {
   return Number.isFinite(level) && level > 0 ? level : 1;
 }
 
+function documentLabelOf(doc: DocumentRecord) {
+  const parts = [doc.filename || doc.doc_id];
+  const extra = doc.version_label || doc.regulation_group_name || doc.upload_time;
+  if (extra) {
+    parts.push(extra);
+  }
+  return parts.join(' - ');
+}
+
 export function RegulationComparePage() {
   const navigate = useNavigate();
-  const params = useParams<{ groupId: string }>();
   const [searchParams] = useSearchParams();
-  const groupId = String(params.groupId ?? '').trim();
 
-  const [loadingVersions, setLoadingVersions] = useState(false);
+  const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [compareLoading, setCompareLoading] = useState(false);
   const [error, setError] = useState('');
-  const [versions, setVersions] = useState<DocumentRecord[]>([]);
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [leftDocId, setLeftDocId] = useState('');
   const [rightDocId, setRightDocId] = useState('');
   const [keyword, setKeyword] = useState('');
   const [result, setResult] = useState<RegulationCompareResult | null>(null);
-  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [leftCatalogLoading, setLeftCatalogLoading] = useState(false);
+  const [rightCatalogLoading, setRightCatalogLoading] = useState(false);
+  const [leftCatalog, setLeftCatalog] = useState<DocumentCatalogItem[]>([]);
   const [rightCatalog, setRightCatalog] = useState<DocumentCatalogItem[]>([]);
-  const [activeCatalogId, setActiveCatalogId] = useState('');
+  const [activeLeftCatalogId, setActiveLeftCatalogId] = useState('');
+  const [activeRightCatalogId, setActiveRightCatalogId] = useState('');
   const [activeArticleKey, setActiveArticleKey] = useState('');
 
   const leftRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const rightRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
-    if (!groupId) {
-      setError('制度组ID不能为空');
-      return;
-    }
-
-    const loadVersions = async () => {
-      setLoadingVersions(true);
+    const loadDocuments = async () => {
+      setLoadingDocuments(true);
       setError('');
       try {
-        const response = await listRegulationGroupVersions(groupId, false);
-        const items = response.versions || [];
-        setVersions(items);
+        const response = await listDocuments({ includeDeleted: false });
+        const items = response.documents || [];
+        setDocuments(items);
         if (items.length < 2) {
-          setError('当前制度组版本不足2个，无法对比');
+          setError('当前可用文档不足2个，无法对比');
           return;
         }
 
@@ -90,20 +95,20 @@ export function RegulationComparePage() {
         setLeftDocId(defaultLeft);
         setRightDocId(defaultRight);
       } catch (err) {
-        setError(err instanceof Error ? err.message : '加载版本列表失败');
+        setError(err instanceof Error ? err.message : '加载文档列表失败');
       } finally {
-        setLoadingVersions(false);
+        setLoadingDocuments(false);
       }
     };
 
-    void loadVersions();
-  }, [groupId, searchParams]);
+    void loadDocuments();
+  }, [searchParams]);
 
   const runCompare = async (nextLeft?: string, nextRight?: string) => {
     const left = String(nextLeft ?? leftDocId).trim();
     const right = String(nextRight ?? rightDocId).trim();
     if (!left || !right) {
-      setError('请选择两个版本');
+      setError('请选择两个文件');
       return;
     }
 
@@ -133,12 +138,42 @@ export function RegulationComparePage() {
 
   useEffect(() => {
     let cancelled = false;
-    const loadCatalog = async () => {
+    const loadLeftCatalog = async () => {
+      if (!leftDocId) {
+        setLeftCatalog([]);
+        return;
+      }
+      setLeftCatalogLoading(true);
+      try {
+        const response = await getDocumentChunks(leftDocId, false);
+        if (!cancelled) {
+          setLeftCatalog(response.data?.catalog || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setLeftCatalog([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLeftCatalogLoading(false);
+        }
+      }
+    };
+
+    void loadLeftCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [leftDocId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRightCatalog = async () => {
       if (!rightDocId) {
         setRightCatalog([]);
         return;
       }
-      setCatalogLoading(true);
+      setRightCatalogLoading(true);
       try {
         const response = await getDocumentChunks(rightDocId, false);
         if (!cancelled) {
@@ -150,12 +185,12 @@ export function RegulationComparePage() {
         }
       } finally {
         if (!cancelled) {
-          setCatalogLoading(false);
+          setRightCatalogLoading(false);
         }
       }
     };
 
-    void loadCatalog();
+    void loadRightCatalog();
     return () => {
       cancelled = true;
     };
@@ -164,11 +199,13 @@ export function RegulationComparePage() {
   useEffect(() => {
     leftRefs.current = {};
     rightRefs.current = {};
-    const firstCatalog = rightCatalog[0]?.id || '';
+    const firstLeftCatalog = leftCatalog[0]?.id || '';
+    const firstRightCatalog = rightCatalog[0]?.id || '';
     const firstArticle = result?.diffs?.[0]?.article_key || '';
-    setActiveCatalogId(firstCatalog);
+    setActiveLeftCatalogId(firstLeftCatalog);
+    setActiveRightCatalogId(firstRightCatalog);
     setActiveArticleKey(firstArticle);
-  }, [result, rightCatalog]);
+  }, [result, leftCatalog, rightCatalog]);
 
   const compareItems = useMemo(() => result?.diffs || [], [result]);
 
@@ -176,6 +213,19 @@ export function RegulationComparePage() {
     const map = new Map<string, RegulationCompareItem>();
     compareItems.forEach((item) => {
       map.set(item.article_key, item);
+    });
+    return map;
+  }, [compareItems]);
+
+  const leftChunkToArticleKey = useMemo(() => {
+    const map = new Map<string, string>();
+    compareItems.forEach((item) => {
+      (item.old_chunk_ids || []).forEach((chunkId) => {
+        const key = String(chunkId || '').trim();
+        if (key && !map.has(key)) {
+          map.set(key, item.article_key);
+        }
+      });
     });
     return map;
   }, [compareItems]);
@@ -193,12 +243,11 @@ export function RegulationComparePage() {
     return map;
   }, [compareItems]);
 
-  const titleToArticleKey = useMemo(() => {
+  const leftTitleToArticleKey = useMemo(() => {
     const map = new Map<string, string>();
     compareItems.forEach((item) => {
       const candidates = [
         item.article_no,
-        getFirstLine(item.new_text),
         getFirstLine(item.old_text),
         item.article_key.startsWith('section:') ? item.article_key.slice('section:'.length) : item.article_key
       ];
@@ -212,7 +261,36 @@ export function RegulationComparePage() {
     return map;
   }, [compareItems]);
 
-  const firstCatalogIdByArticleKey = useMemo(() => {
+  const rightTitleToArticleKey = useMemo(() => {
+    const map = new Map<string, string>();
+    compareItems.forEach((item) => {
+      const candidates = [
+        item.article_no,
+        getFirstLine(item.new_text),
+        item.article_key.startsWith('section:') ? item.article_key.slice('section:'.length) : item.article_key
+      ];
+      candidates.forEach((candidate) => {
+        const normalized = normalizeCatalogText(candidate);
+        if (normalized && !map.has(normalized)) {
+          map.set(normalized, item.article_key);
+        }
+      });
+    });
+    return map;
+  }, [compareItems]);
+
+  const firstLeftCatalogIdByArticleKey = useMemo(() => {
+    const map = new Map<string, string>();
+    leftCatalog.forEach((catalog) => {
+      const articleKey = leftChunkToArticleKey.get(String(catalog.chunk_id || '').trim());
+      if (articleKey && !map.has(articleKey)) {
+        map.set(articleKey, catalog.id);
+      }
+    });
+    return map;
+  }, [leftCatalog, leftChunkToArticleKey]);
+
+  const firstRightCatalogIdByArticleKey = useMemo(() => {
     const map = new Map<string, string>();
     rightCatalog.forEach((catalog) => {
       const articleKey = rightChunkToArticleKey.get(String(catalog.chunk_id || '').trim());
@@ -223,14 +301,26 @@ export function RegulationComparePage() {
     return map;
   }, [rightCatalog, rightChunkToArticleKey]);
 
-  const resolveArticleKeyForCatalog = (catalog: DocumentCatalogItem) => {
-    const byChunk = rightChunkToArticleKey.get(String(catalog.chunk_id || '').trim());
+  const resolveArticleKeyForCatalog = (
+    catalog: DocumentCatalogItem,
+    chunkMap: Map<string, string>,
+    titleMap: Map<string, string>
+  ) => {
+    const byChunk = chunkMap.get(String(catalog.chunk_id || '').trim());
     if (byChunk) return byChunk;
-    const byTitle = titleToArticleKey.get(normalizeCatalogText(catalog.title));
+    const byTitle = titleMap.get(normalizeCatalogText(catalog.title));
     return byTitle || '';
   };
 
-  const catalogIndexMap = useMemo(() => {
+  const leftCatalogIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    leftCatalog.forEach((item, index) => {
+      map.set(item.id, index);
+    });
+    return map;
+  }, [leftCatalog]);
+
+  const rightCatalogIndexMap = useMemo(() => {
     const map = new Map<string, number>();
     rightCatalog.forEach((item, index) => {
       map.set(item.id, index);
@@ -238,36 +328,41 @@ export function RegulationComparePage() {
     return map;
   }, [rightCatalog]);
 
-  const findFirstDescendantArticleKey = (parentIndex: number) => {
-    if (parentIndex < 0 || parentIndex >= rightCatalog.length) return '';
-    const parentLevel = getCatalogLevel(rightCatalog[parentIndex]);
-    for (let idx = parentIndex + 1; idx < rightCatalog.length; idx += 1) {
-      const item = rightCatalog[idx];
+  const findFirstDescendantArticleKey = (
+    catalogs: DocumentCatalogItem[],
+    parentIndex: number,
+    chunkMap: Map<string, string>,
+    titleMap: Map<string, string>
+  ) => {
+    if (parentIndex < 0 || parentIndex >= catalogs.length) return '';
+    const parentLevel = getCatalogLevel(catalogs[parentIndex]);
+    for (let idx = parentIndex + 1; idx < catalogs.length; idx += 1) {
+      const item = catalogs[idx];
       const level = getCatalogLevel(item);
       if (level <= parentLevel) break;
-      const articleKey = resolveArticleKeyForCatalog(item);
+      const articleKey = resolveArticleKeyForCatalog(item, chunkMap, titleMap);
       if (articleKey) return articleKey;
     }
     return '';
   };
 
-  const jumpByCatalog = (catalog: DocumentCatalogItem) => {
-    setActiveCatalogId(catalog.id);
-    const currentIndex = catalogIndexMap.get(catalog.id) ?? -1;
+  const jumpByLeftCatalog = (catalog: DocumentCatalogItem) => {
+    setActiveLeftCatalogId(catalog.id);
+    const currentIndex = leftCatalogIndexMap.get(catalog.id) ?? -1;
     const hasDescendant = currentIndex >= 0
-      && currentIndex + 1 < rightCatalog.length
-      && getCatalogLevel(rightCatalog[currentIndex + 1]) > getCatalogLevel(catalog);
+      && currentIndex + 1 < leftCatalog.length
+      && getCatalogLevel(leftCatalog[currentIndex + 1]) > getCatalogLevel(catalog);
 
     let articleKey = '';
     if (hasDescendant) {
-      articleKey = findFirstDescendantArticleKey(currentIndex);
+      articleKey = findFirstDescendantArticleKey(leftCatalog, currentIndex, leftChunkToArticleKey, leftTitleToArticleKey);
       if (!articleKey) {
-        articleKey = resolveArticleKeyForCatalog(catalog);
+        articleKey = resolveArticleKeyForCatalog(catalog, leftChunkToArticleKey, leftTitleToArticleKey);
       }
     } else {
-      articleKey = resolveArticleKeyForCatalog(catalog);
+      articleKey = resolveArticleKeyForCatalog(catalog, leftChunkToArticleKey, leftTitleToArticleKey);
       if (!articleKey) {
-        articleKey = findFirstDescendantArticleKey(currentIndex);
+        articleKey = findFirstDescendantArticleKey(leftCatalog, currentIndex, leftChunkToArticleKey, leftTitleToArticleKey);
       }
     }
     if (!articleKey) return;
@@ -278,6 +373,33 @@ export function RegulationComparePage() {
     if (String(entry.old_text || '').trim()) {
       leftRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
+    setActiveArticleKey(articleKey);
+  };
+
+  const jumpByRightCatalog = (catalog: DocumentCatalogItem) => {
+    setActiveRightCatalogId(catalog.id);
+    const currentIndex = rightCatalogIndexMap.get(catalog.id) ?? -1;
+    const hasDescendant = currentIndex >= 0
+      && currentIndex + 1 < rightCatalog.length
+      && getCatalogLevel(rightCatalog[currentIndex + 1]) > getCatalogLevel(catalog);
+
+    let articleKey = '';
+    if (hasDescendant) {
+      articleKey = findFirstDescendantArticleKey(rightCatalog, currentIndex, rightChunkToArticleKey, rightTitleToArticleKey);
+      if (!articleKey) {
+        articleKey = resolveArticleKeyForCatalog(catalog, rightChunkToArticleKey, rightTitleToArticleKey);
+      }
+    } else {
+      articleKey = resolveArticleKeyForCatalog(catalog, rightChunkToArticleKey, rightTitleToArticleKey);
+      if (!articleKey) {
+        articleKey = findFirstDescendantArticleKey(rightCatalog, currentIndex, rightChunkToArticleKey, rightTitleToArticleKey);
+      }
+    }
+    if (!articleKey) return;
+
+    const entry = compareByKey.get(articleKey);
+    if (!entry) return;
+
     if (String(entry.new_text || '').trim()) {
       rightRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -286,26 +408,25 @@ export function RegulationComparePage() {
 
   const onEntryClick = (articleKey: string) => {
     setActiveArticleKey(articleKey);
-    const catalogId = firstCatalogIdByArticleKey.get(articleKey);
-    if (catalogId) {
-      setActiveCatalogId(catalogId);
+    const leftCatalogId = firstLeftCatalogIdByArticleKey.get(articleKey);
+    if (leftCatalogId) {
+      setActiveLeftCatalogId(leftCatalogId);
+    }
+    const rightCatalogId = firstRightCatalogIdByArticleKey.get(articleKey);
+    if (rightCatalogId) {
+      setActiveRightCatalogId(rightCatalogId);
     }
   };
 
-  const groupName = useMemo(
-    () => versions[0]?.regulation_group_name || result?.left_document?.regulation_group_name || groupId,
-    [versions, result, groupId]
-  );
-
-  const leftVersion = useMemo(() => versions.find((doc) => doc.doc_id === leftDocId) || null, [versions, leftDocId]);
-  const rightVersion = useMemo(() => versions.find((doc) => doc.doc_id === rightDocId) || null, [versions, rightDocId]);
+  const leftDocument = useMemo(() => documents.find((doc) => doc.doc_id === leftDocId) || null, [documents, leftDocId]);
+  const rightDocument = useMemo(() => documents.find((doc) => doc.doc_id === rightDocId) || null, [documents, rightDocId]);
 
   return (
     <Layout className="doc-preview-layout">
       <Header className="doc-preview-header">
         <Space size={12}>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/documents')}>返回文档管理</Button>
-          <Typography.Text strong>{`制度版本对比 - ${groupName}`}</Typography.Text>
+          <Typography.Text strong>文件对比</Typography.Text>
         </Space>
       </Header>
       <Content className="doc-preview-content">
@@ -314,18 +435,22 @@ export function RegulationComparePage() {
         <Card className="app-card" style={{ marginBottom: 12 }}>
           <Space wrap size={[12, 10]}>
             <Select
-              style={{ width: 330 }}
+              showSearch
+              optionFilterProp="label"
+              style={{ width: 360 }}
               value={leftDocId || undefined}
-              placeholder="选择左侧版本（旧）"
+              placeholder="选择左侧文件"
               onChange={setLeftDocId}
-              options={versions.map((doc) => ({ value: doc.doc_id, label: `${versionLabelOf(doc)} - ${doc.filename}` }))}
+              options={documents.map((doc) => ({ value: doc.doc_id, label: documentLabelOf(doc) }))}
             />
             <Select
-              style={{ width: 330 }}
+              showSearch
+              optionFilterProp="label"
+              style={{ width: 360 }}
               value={rightDocId || undefined}
-              placeholder="选择右侧版本（新）"
+              placeholder="选择右侧文件"
               onChange={setRightDocId}
-              options={versions.map((doc) => ({ value: doc.doc_id, label: `${versionLabelOf(doc)} - ${doc.filename}` }))}
+              options={documents.map((doc) => ({ value: doc.doc_id, label: documentLabelOf(doc) }))}
             />
             <Input
               style={{ width: 280 }}
@@ -346,49 +471,51 @@ export function RegulationComparePage() {
           </Space>
         </Card>
 
-        {loadingVersions ? (
+        {loadingDocuments ? (
           <div className="doc-preview-loading"><Spin /></div>
         ) : !result ? (
           <Card className="app-card">
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请选择两个版本后开始对比" />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请选择两个文件后开始对比" />
           </Card>
         ) : (
           <Card
             className="app-card"
-            title={`对比目录：共 ${result.returned_count} 条${result.truncated ? '（结果已截断）' : ''}`}
+            title={`对比结果：共 ${result.returned_count} 条${result.truncated ? '（结果已截断）' : ''}`}
           >
             {compareItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无匹配差异" />
             ) : (
               <Row gutter={12} className="compare-main-row">
-                <Col xs={24} lg={5}>
-                  <div className="catalog-scroll compare-catalog-scroll">
-                    {catalogLoading ? (
-                      <div className="doc-preview-loading"><Spin /></div>
-                    ) : (
-                      <List
-                        size="small"
-                        dataSource={rightCatalog}
-                        renderItem={(catalog) => (
-                          <List.Item
-                            className={`catalog-item ${activeCatalogId === catalog.id ? 'active' : ''}`}
-                            onClick={() => jumpByCatalog(catalog)}
-                            style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
-                          >
-                            <div className="catalog-row">
-                            <Typography.Text ellipsis>{catalog.title}</Typography.Text>
-                              <Typography.Text type="secondary" className="catalog-line-no">
-                                {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
-                              </Typography.Text>
-                            </div>
-                          </List.Item>
-                        )}
-                      />
-                    )}
-                  </div>
+                <Col xs={24} lg={4}>
+                  <Card size="small" title={`左侧目录：${leftDocument ? versionLabelOf(leftDocument) : leftDocId}`} className="compare-pane-card">
+                    <div className="catalog-scroll compare-catalog-scroll">
+                      {leftCatalogLoading ? (
+                        <div className="doc-preview-loading"><Spin /></div>
+                      ) : (
+                        <List
+                          size="small"
+                          dataSource={leftCatalog}
+                          renderItem={(catalog) => (
+                            <List.Item
+                              className={`catalog-item ${activeLeftCatalogId === catalog.id ? 'active' : ''}`}
+                              onClick={() => jumpByLeftCatalog(catalog)}
+                              style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
+                            >
+                              <div className="catalog-row">
+                                <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                                <Typography.Text type="secondary" className="catalog-line-no">
+                                  {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
+                                </Typography.Text>
+                              </div>
+                            </List.Item>
+                          )}
+                        />
+                      )}
+                    </div>
+                  </Card>
                 </Col>
-                <Col xs={24} lg={9}>
-                  <Card size="small" title={`旧版本：${leftVersion ? versionLabelOf(leftVersion) : leftDocId}`} className="compare-pane-card">
+                <Col xs={24} lg={8}>
+                  <Card size="small" title={`左侧内容：${leftDocument ? versionLabelOf(leftDocument) : leftDocId}`} className="compare-pane-card">
                     <div className="compare-pane-scroll">
                       {compareItems.map((item) => (
                         <div
@@ -410,8 +537,8 @@ export function RegulationComparePage() {
                     </div>
                   </Card>
                 </Col>
-                <Col xs={24} lg={10}>
-                  <Card size="small" title={`新版本：${rightVersion ? versionLabelOf(rightVersion) : rightDocId}`} className="compare-pane-card">
+                <Col xs={24} lg={8}>
+                  <Card size="small" title={`右侧内容：${rightDocument ? versionLabelOf(rightDocument) : rightDocId}`} className="compare-pane-card">
                     <div className="compare-pane-scroll">
                       {compareItems.map((item) => (
                         <div
@@ -430,6 +557,34 @@ export function RegulationComparePage() {
                           </Typography.Paragraph>
                         </div>
                       ))}
+                    </div>
+                  </Card>
+                </Col>
+                <Col xs={24} lg={4}>
+                  <Card size="small" title={`右侧目录：${rightDocument ? versionLabelOf(rightDocument) : rightDocId}`} className="compare-pane-card">
+                    <div className="catalog-scroll compare-catalog-scroll">
+                      {rightCatalogLoading ? (
+                        <div className="doc-preview-loading"><Spin /></div>
+                      ) : (
+                        <List
+                          size="small"
+                          dataSource={rightCatalog}
+                          renderItem={(catalog) => (
+                            <List.Item
+                              className={`catalog-item ${activeRightCatalogId === catalog.id ? 'active' : ''}`}
+                              onClick={() => jumpByRightCatalog(catalog)}
+                              style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
+                            >
+                              <div className="catalog-row">
+                                <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                                <Typography.Text type="secondary" className="catalog-line-no">
+                                  {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
+                                </Typography.Text>
+                              </div>
+                            </List.Item>
+                          )}
+                        />
+                      )}
                     </div>
                   </Card>
                 </Col>

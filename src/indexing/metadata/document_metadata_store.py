@@ -30,6 +30,7 @@ class DocumentRecord:
     regulation_group_id: str = ""  # 同一制度分组ID
     regulation_group_name: str = ""  # 同一制度分组名称
     version_label: str = ""  # 版本标签（如：2018版）
+    storage_file_id: str = ""  # 统一文件存储ID
     
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -93,6 +94,8 @@ class DocumentMetadataStore:
             existing.status = "active"
             existing.file_path = record.file_path
             existing.filename = record.filename
+            if record.storage_file_id:
+                existing.storage_file_id = record.storage_file_id
             if save:
                 self.save()
             logger.info(f"更新文档记录: {record.filename}, 版本: {existing.version}")

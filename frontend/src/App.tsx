@@ -1,4 +1,4 @@
-import { FileSearchOutlined, FileTextOutlined, InboxOutlined, MessageOutlined } from '@ant-design/icons';
+import { FileSearchOutlined, FileTextOutlined, FolderOpenOutlined, InboxOutlined, MessageOutlined, UploadOutlined } from '@ant-design/icons';
 import { Layout, Menu, Segmented, Space, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -6,6 +6,8 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { getDocumentStats, getInfo, listDocuments } from './api/rag';
 import { DocumentPdfPreviewPage } from './components/DocumentPdfPreviewPage';
 import { DocumentsPanel } from './components/DocumentsPanel';
+import { FileStoragePanel } from './components/FileStoragePanel';
+import { FileStorageUploadPanel } from './components/FileStorageUploadPanel';
 import { RegulationComparePage } from './components/RegulationComparePage';
 import { SearchPanel } from './components/SearchPanel';
 import { SystemPanel } from './components/SystemPanel';
@@ -86,6 +88,8 @@ export default function App() {
     if (location.pathname.startsWith('/system')) return 'system';
     if (location.pathname.startsWith('/upload')) return 'upload';
     if (location.pathname.startsWith('/documents')) return 'documents';
+    if (location.pathname.startsWith('/file-upload')) return 'file-upload';
+    if (location.pathname.startsWith('/file-storage')) return 'file-storage';
     return 'chat';
   }, [location.pathname]);
 
@@ -103,10 +107,10 @@ export default function App() {
     );
   }
 
-  if (location.pathname.startsWith('/documents/compare/')) {
+  if (location.pathname.startsWith('/documents/compare')) {
     return (
       <Routes>
-        <Route path="/documents/compare/:groupId" element={<RegulationComparePage />} />
+        <Route path="/documents/compare" element={<RegulationComparePage />} />
         <Route path="*" element={<Navigate to="/documents" replace />} />
       </Routes>
     );
@@ -125,6 +129,8 @@ export default function App() {
             { key: 'chat', icon: <MessageOutlined />, label: '检索对话' },
             { key: 'upload', icon: <InboxOutlined />, label: '文档上传' },
             { key: 'documents', icon: <FileTextOutlined />, label: '文档管理' },
+            { key: 'file-upload', icon: <UploadOutlined />, label: '统一文件上传' },
+            { key: 'file-storage', icon: <FolderOpenOutlined />, label: '统一文件管理' },
             { key: 'system', icon: <FileSearchOutlined />, label: '系统状态' }
           ]}
           onClick={onMenuClick}
@@ -186,6 +192,22 @@ export default function App() {
                     onRefresh={loadDocs}
                     onDataChanged={refreshAll}
                   />
+                </div>
+              )}
+            />
+            <Route
+              path="/file-upload"
+              element={(
+                <div className="tab-content tab-documents">
+                  <FileStorageUploadPanel key={`file-upload-${scope}`} scope={scope} />
+                </div>
+              )}
+            />
+            <Route
+              path="/file-storage"
+              element={(
+                <div className="tab-content tab-documents">
+                  <FileStoragePanel key={`files-${scope}`} scope={scope} />
                 </div>
               )}
             />

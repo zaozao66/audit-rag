@@ -450,10 +450,15 @@ def upload_and_store_documents():
         if not uploaded_files or all(f.filename == '' for f in uploaded_files):
             return jsonify({"error": "没有选择任何文件"}), 400
 
+        file_storage_service = current_app.extensions.get('file_storage_service')
+        if not file_storage_service:
+            return jsonify({"error": "统一文件存储服务未初始化"}), 503
+
         save_after_processing = request.form.get('save_after_processing', 'true').lower() == 'true'
         _ensure_no_custom_store_path(request.form.get('store_path'))
 
         temp_file_paths: List[str] = []
+        file_id_by_temp_path: Dict[str, str] = {}
         original_filenames: List[str] = []
         parse_errors: List[Dict[str, str]] = []
 
@@ -465,6 +470,12 @@ def upload_and_store_documents():
                     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
                     file.save(temp_file.name)
                     temp_file_paths.append(temp_file.name)
+                    stored = file_storage_service.store_from_path(
+                        source_path=temp_file.name,
+                        original_filename=filename,
+                        domain=rag_processor.scope,
+                    )
+                    file_id_by_temp_path[temp_file.name] = stored.file_id
 
             doc_type = request.form.get('doc_type', 'internal_regulation')
             enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
@@ -482,14 +493,28 @@ def upload_and_store_documents():
                 "version_label": version_label,
             }
 
-            num_processed = rag_processor.process_documents_from_files(
+            documents = process_uploaded_documents(
                 temp_file_paths,
-                save_after_processing=save_after_processing,
                 doc_type=doc_type,
                 title=title,
                 original_filenames=original_filenames,
                 error_collector=parse_errors,
                 extra_metadata=extra_metadata,
+            )
+            for doc in documents:
+                mapped_file_id = file_id_by_temp_path.get(str(doc.get("file_path", "") or ""))
+                if mapped_file_id:
+                    doc["storage_file_id"] = mapped_file_id
+            if not documents:
+                return jsonify({
+                    "error": "上传文件解析后没有可入库文档",
+                    "file_count": len(uploaded_files),
+                    "failed_files": parse_errors,
+                }), 400
+
+            num_processed = rag_processor.process_documents(
+                documents,
+                save_after_processing=save_after_processing,
             )
         finally:
             for temp_path in temp_file_paths:
@@ -545,6 +570,10 @@ def upload_archive_and_store_documents():
         if os.path.splitext(archive_name)[1].lower() != '.zip':
             return jsonify({"error": "仅支持上传 ZIP 压缩包"}), 400
 
+        file_storage_service = current_app.extensions.get('file_storage_service')
+        if not file_storage_service:
+            return jsonify({"error": "统一文件存储服务未初始化"}), 503
+
         save_after_processing = _to_bool(request.form.get('save_after_processing', 'true'), default=True)
         _ensure_no_custom_store_path(request.form.get('store_path'))
 
@@ -584,6 +613,16 @@ def upload_archive_and_store_documents():
                 max_compression_ratio=MAX_ARCHIVE_COMPRESSION_RATIO,
             )
 
+            file_id_by_path: Dict[str, str] = {}
+            for idx, extracted_path in enumerate(extraction.extracted_paths):
+                original_name = extraction.original_filenames[idx] if idx < len(extraction.original_filenames) else os.path.basename(extracted_path)
+                stored = file_storage_service.store_from_path(
+                    source_path=extracted_path,
+                    original_filename=original_name,
+                    domain=rag_processor.scope,
+                )
+                file_id_by_path[extracted_path] = stored.file_id
+
             documents = process_uploaded_documents(
                 extraction.extracted_paths,
                 doc_type=doc_type,
@@ -592,6 +631,10 @@ def upload_archive_and_store_documents():
                 error_collector=parse_errors,
                 extra_metadata=extra_metadata,
             )
+            for doc in documents:
+                mapped_file_id = file_id_by_path.get(str(doc.get("file_path", "") or ""))
+                if mapped_file_id:
+                    doc["storage_file_id"] = mapped_file_id
             if not documents:
                 return jsonify({
                     "error": "压缩包解析后没有可入库文档",

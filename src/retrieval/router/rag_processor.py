@@ -603,13 +603,14 @@ class RAGProcessor:
             content_hash = self._calculate_content_hash(content)
             doc_id = content_hash[:16]
             group_id, group_name, version_label = self._resolve_regulation_group_meta(doc)
+            storage_file_id = str(doc.get("storage_file_id", "") or "").strip()
 
             existing = self.metadata_store.get_document(doc_id)
             if existing and existing.status == "active":
                 if self._load_full_text(doc_id) is None:
                     self._save_full_text(doc_id, content)
                 existing_path = str(existing.file_path or "").strip()
-                if not existing_path or not os.path.exists(existing_path):
+                if (not existing_path or not os.path.exists(existing_path)) and not storage_file_id:
                     persisted = self._persist_original_file(
                         doc_id=doc_id,
                         source_path=doc.get("file_path", ""),
@@ -618,6 +619,9 @@ class RAGProcessor:
                     if persisted:
                         existing.file_path = persisted
                 metadata_changed = False
+                if storage_file_id and existing.storage_file_id != storage_file_id:
+                    existing.storage_file_id = storage_file_id
+                    metadata_changed = True
                 if group_id and existing.regulation_group_id != group_id:
                     existing.regulation_group_id = group_id
                     metadata_changed = True
@@ -673,16 +677,19 @@ class RAGProcessor:
             metadata_dirty = False
             for entry in pending_entries:
                 doc = entry["doc"]
-                original_file_path = self._persist_original_file(
-                    doc_id=entry["doc_id"],
-                    source_path=doc.get("file_path", ""),
-                    filename=doc.get("filename", ""),
-                )
+                storage_file_id = str(doc.get("storage_file_id", "") or "").strip()
+                original_file_path = ""
+                if not storage_file_id:
+                    original_file_path = self._persist_original_file(
+                        doc_id=entry["doc_id"],
+                        source_path=doc.get("file_path", ""),
+                        filename=doc.get("filename", ""),
+                    ) or ""
                 record = DocumentRecord(
                     doc_id=entry["doc_id"],
                     filename=doc.get("filename", "unknown"),
                     content_hash=entry["content_hash"],
-                    file_path=original_file_path or doc.get("file_path", ""),
+                    file_path=original_file_path or ("" if storage_file_id else doc.get("file_path", "")),
                     file_size=len(entry["content"].encode("utf-8")),
                     doc_type=doc.get("doc_type", "unknown"),
                     upload_time=datetime.now().isoformat(),
@@ -690,6 +697,7 @@ class RAGProcessor:
                     regulation_group_id=str(entry.get("group_id", "") or ""),
                     regulation_group_name=str(entry.get("group_name", "") or ""),
                     version_label=str(entry.get("version_label", "") or ""),
+                    storage_file_id=storage_file_id,
                 )
 
                 is_new = self.metadata_store.add_document(record, save=False)

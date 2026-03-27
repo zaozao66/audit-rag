@@ -1,9 +1,16 @@
+import io
 import mimetypes
 import os
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 
 from src.api.routes.scope_utils import extract_scope_from_request
+from src.api.services.file_storage_service import (
+    FILE_BLOB_MISSING_MESSAGE,
+    FILE_NOT_FOUND_MESSAGE,
+    FileBlobMissingError,
+    FileRecordNotFoundError,
+)
 from src.api.services.rag_service import RAGService
 
 
@@ -277,6 +284,45 @@ def get_document_raw(doc_id):
         detail = rag_processor.get_document_detail(doc_id)
         if not detail:
             return jsonify({"error": "文档不存在"}), 404
+
+        storage_file_id = str(detail.get("storage_file_id", "") or "").strip()
+        file_storage_service = current_app.extensions.get("file_storage_service")
+        if storage_file_id and file_storage_service:
+            try:
+                local_path = file_storage_service.resolve_local_path(storage_file_id)
+                if local_path and os.path.isfile(local_path):
+                    mimetype, _ = mimetypes.guess_type(local_path)
+                    return send_file(
+                        local_path,
+                        mimetype=mimetype or "application/octet-stream",
+                        as_attachment=False,
+                        download_name=detail.get("filename") or os.path.basename(local_path),
+                        conditional=True,
+                    )
+
+                record, payload = file_storage_service.read_file_by_id(storage_file_id)
+                mimetype, _ = mimetypes.guess_type(record.original_filename)
+                return send_file(
+                    io.BytesIO(payload),
+                    mimetype=mimetype or "application/octet-stream",
+                    as_attachment=False,
+                    download_name=record.original_filename or detail.get("filename") or "document",
+                    conditional=True,
+                )
+            except FileRecordNotFoundError:
+                current_app.logger.error(
+                    "读取文档原文件失败: storage_file_id=%s, %s",
+                    storage_file_id,
+                    FILE_NOT_FOUND_MESSAGE,
+                )
+                return jsonify({"error": FILE_NOT_FOUND_MESSAGE}), 404
+            except FileBlobMissingError:
+                current_app.logger.error(
+                    "读取文档原文件失败: storage_file_id=%s, %s",
+                    storage_file_id,
+                    FILE_BLOB_MISSING_MESSAGE,
+                )
+                return jsonify({"error": FILE_BLOB_MISSING_MESSAGE}), 404
 
         file_path = str(detail.get("file_path", "") or "").strip()
         candidates = []

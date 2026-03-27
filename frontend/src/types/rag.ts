@@ -323,3 +323,34 @@ export interface StatsResponse {
   success: boolean;
   stats: DocumentStats;
 }
+
+export interface StoredFileRecord {
+  domain: string;
+  file_id: string;
+  original_filename: string;
+  file_type: string;
+  upload_time: string;
+  storage_key: string;
+  file_size: number;
+  storage_type: 'local' | 'minio' | string;
+}
+
+export interface ListStoredFilesResponse {
+  success: boolean;
+  page: number;
+  page_size: number;
+  total: number;
+  items: StoredFileRecord[];
+}
+
+export interface DeleteStoredFileResponse {
+  success: boolean;
+  file_id: string;
+  original_filename: string;
+}
+
+export interface UploadStoredFilesResponse {
+  success: boolean;
+  count: number;
+  records: StoredFileRecord[];
+}

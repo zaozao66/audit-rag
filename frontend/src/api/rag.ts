@@ -6,7 +6,9 @@ import type {
   DocumentChunksResponse,
   DocumentDetailResponse,
   DocumentIdByFilenameResponse,
+  DeleteStoredFileResponse,
   InfoResponse,
+  ListStoredFilesResponse,
   ListDocumentsResponse,
   RegulationGroupOptions,
   RegulationGroupsResponse,
@@ -19,6 +21,7 @@ import type {
   StreamSessionEvent,
   StatsResponse,
   UploadResponse,
+  UploadStoredFilesResponse,
   RetrievalOptions
 } from '../types/rag';
 
@@ -306,6 +309,54 @@ export function clearAllDocuments() {
 
 export function getDocumentStats() {
   return apiFetch<StatsResponse>('/documents/stats');
+}
+
+export function uploadStoredFiles(payload: { files: File[]; scope?: string }) {
+  const form = new FormData();
+  payload.files.forEach((file) => form.append('files', file));
+  if (payload.scope?.trim()) {
+    form.append('domain', payload.scope.trim());
+  }
+
+  return apiFetch<UploadStoredFilesResponse>('/files/upload', {
+    method: 'POST',
+    headers: payload.scope?.trim()
+      ? { 'X-Knowledge-Scope': payload.scope.trim().toLowerCase() }
+      : undefined,
+    body: form
+  });
+}
+
+export function listStoredFiles(params?: {
+  fileType?: string;
+  keyword?: string;
+  domain?: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.fileType?.trim()) query.set('file_type', params.fileType.trim());
+  if (params?.keyword?.trim()) query.set('keyword', params.keyword.trim());
+  if (params?.domain?.trim()) query.set('domain', params.domain.trim());
+  query.set('page', String(params?.page ?? 1));
+  query.set('page_size', String(params?.pageSize ?? 20));
+  return apiFetch<ListStoredFilesResponse>(`/files?${query.toString()}`);
+}
+
+export function deleteStoredFile(fileId: string) {
+  return apiFetch<DeleteStoredFileResponse>(`/files/${encodeURIComponent(fileId)}`, {
+    method: 'DELETE'
+  });
+}
+
+export function getStoredFileUrl(fileId: string) {
+  return `${API_BASE}/files/${encodeURIComponent(fileId)}`;
+}
+
+export function getStoredFileByFilenameUrl(filename: string, domain?: string) {
+  const query = new URLSearchParams({ filename });
+  if (domain?.trim()) query.set('domain', domain.trim());
+  return `${API_BASE}/files/by-filename?${query.toString()}`;
 }
 
 function buildRetrievalPayload(options?: Partial<RetrievalOptions>) {

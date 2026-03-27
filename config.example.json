@@ -90,6 +90,11 @@
         }
       }
     },
+    "file_storage": {
+      "storageType": "local",
+      "localRootDir": "./appData",
+      "metadataPath": "./appData/file_storage_metadata.json"
+    },
     "default_scope": "audit",
     "scope_required": false,
     "knowledge_scopes": {
@@ -216,6 +221,15 @@
           }
         }
       }
+    },
+    "file_storage": {
+      "storageType": "minio",
+      "localRootDir": "./appData",
+      "metadataPath": "./appData/file_storage_metadata.json",
+      "minioEndpoint": "https://minio.example.com",
+      "minioAccessKey": "YOUR_MINIO_ACCESS_KEY",
+      "minioSecretKey": "YOUR_MINIO_SECRET_KEY",
+      "minioBucket": "audit-rag-files"
     },
     "default_scope": "audit",
     "scope_required": false,

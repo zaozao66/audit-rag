@@ -62,8 +62,6 @@ export function DocumentsPanel({
   const [historyVisible, setHistoryVisible] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyVersions, setHistoryVersions] = useState<DocumentRecord[]>([]);
-  const [compareCheckLoading, setCompareCheckLoading] = useState(false);
-  const [compareVersionCount, setCompareVersionCount] = useState<number>(0);
 
   const selected = useMemo(() => documents.find((item) => item.doc_id === selectedId) ?? null, [documents, selectedId]);
 
@@ -139,46 +137,11 @@ export function DocumentsPanel({
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const groupId = String(selected?.regulation_group_id || '').trim();
-    if (!groupId) {
-      setCompareVersionCount(0);
-      setCompareCheckLoading(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const checkVersions = async () => {
-      setCompareCheckLoading(true);
-      try {
-        const result = await listRegulationGroupVersions(groupId, false);
-        if (!cancelled) {
-          setCompareVersionCount(Array.isArray(result.versions) ? result.versions.length : 0);
-        }
-      } catch {
-        if (!cancelled) {
-          setCompareVersionCount(0);
-        }
-      } finally {
-        if (!cancelled) {
-          setCompareCheckLoading(false);
-        }
-      }
-    };
-
-    void checkVersions();
-    return () => {
-      cancelled = true;
-    };
-  }, [selected?.regulation_group_id]);
-
   const openComparePage = () => {
-    if (!selected?.regulation_group_id) return;
+    if (!selected) return;
     const search = new URLSearchParams();
     search.set('right', selected.doc_id);
-    const compareUrl = `${window.location.origin}${window.location.pathname}#/documents/compare/${encodeURIComponent(selected.regulation_group_id)}?${search.toString()}`;
+    const compareUrl = `${window.location.origin}${window.location.pathname}#/documents/compare?${search.toString()}`;
     window.open(compareUrl, '_blank', 'noopener,noreferrer');
   };
 
@@ -301,9 +264,9 @@ export function DocumentsPanel({
                   onClick={() => {
                     openComparePage();
                   }}
-                  disabled={!selected.regulation_group_id || compareCheckLoading || compareVersionCount < 2}
+                  disabled={documents.length < 2}
                 >
-                  版本对比
+                  文件对比
                 </Button>
                 <Popconfirm title="确认删除该文档？" onConfirm={removeDoc} okButtonProps={{ danger: true }}>
                   <Button danger size="small">删除文档</Button>
