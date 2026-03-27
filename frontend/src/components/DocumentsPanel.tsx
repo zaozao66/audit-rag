@@ -222,6 +222,9 @@ export function DocumentsPanel({
                           <Tag>{doc.doc_type}</Tag>
                           <Typography.Text type="secondary">{doc.chunk_count} chunks</Typography.Text>
                           <Tag color={doc.status === 'active' ? 'green' : 'default'}>{doc.status}</Tag>
+                          <Tag color={doc.searchable ? 'processing' : 'gold'}>
+                            {doc.searchable ? '可检索' : '仅预览'}
+                          </Tag>
                           {doc.regulation_group_name ? <Tag color="blue">{doc.regulation_group_name}</Tag> : null}
                           {doc.version_label ? <Tag color="purple">{doc.version_label}</Tag> : null}
                         </Space>
@@ -316,6 +319,7 @@ export function DocumentsPanel({
                   <Typography.Text type="secondary">doc_id: {selected.doc_id}</Typography.Text>
                   <Typography.Text type="secondary">上传时间: {selected.upload_time}</Typography.Text>
                   <Typography.Text type="secondary">版本: {selected.version}</Typography.Text>
+                  <Typography.Text type="secondary">模式: {selected.searchable ? '可检索' : '仅预览'}</Typography.Text>
                   {selected.regulation_group_name ? (
                     <Typography.Text type="secondary">制度组: {selected.regulation_group_name}</Typography.Text>
                   ) : null}

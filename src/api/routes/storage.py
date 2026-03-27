@@ -455,6 +455,7 @@ def upload_and_store_documents():
             return jsonify({"error": "统一文件存储服务未初始化"}), 503
 
         save_after_processing = request.form.get('save_after_processing', 'true').lower() == 'true'
+        searchable = _to_bool(request.form.get('searchable', 'true'), default=True)
         _ensure_no_custom_store_path(request.form.get('store_path'))
 
         temp_file_paths: List[str] = []
@@ -487,6 +488,7 @@ def upload_and_store_documents():
 
             title = request.form.get('title', None)
             extra_metadata = {
+                "searchable": searchable,
                 "enable_regulation_group": enable_regulation_group,
                 "regulation_group_id": regulation_group_id,
                 "regulation_group_name": regulation_group_name,
@@ -575,6 +577,7 @@ def upload_archive_and_store_documents():
             return jsonify({"error": "统一文件存储服务未初始化"}), 503
 
         save_after_processing = _to_bool(request.form.get('save_after_processing', 'true'), default=True)
+        searchable = _to_bool(request.form.get('searchable', 'true'), default=True)
         _ensure_no_custom_store_path(request.form.get('store_path'))
 
         doc_type = request.form.get('doc_type', 'internal_regulation')
@@ -586,6 +589,7 @@ def upload_archive_and_store_documents():
             return jsonify({"error": "只有制度类文档支持版本分组"}), 400
         title = request.form.get('title', None)
         extra_metadata = {
+            "searchable": searchable,
             "enable_regulation_group": enable_regulation_group,
             "regulation_group_id": regulation_group_id,
             "regulation_group_name": regulation_group_name,

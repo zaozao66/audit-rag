@@ -22,6 +22,7 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
   const [chunkerType, setChunkerType] = useState('smart');
   const [docType, setDocType] = useState('internal_regulation');
   const [title, setTitle] = useState('');
+  const [searchable, setSearchable] = useState(true);
   const [enableRegulationGroup, setEnableRegulationGroup] = useState(false);
   const [groupMode, setGroupMode] = useState<'existing' | 'new'>('existing');
   const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -93,8 +94,8 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
           }
         : undefined;
       const data = uploadMode === 'files'
-        ? await uploadFiles({ files, chunkerType, docType, title, regulationGroup })
-        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title, regulationGroup });
+        ? await uploadFiles({ files, chunkerType, docType, title, searchable, regulationGroup })
+        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title, searchable, regulationGroup });
       setResult(data);
       onUploaded();
     } catch (err) {
@@ -176,6 +177,22 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
 
         <Form.Item label="标题（可选）">
           <Input value={title} onChange={(e: ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)} placeholder="如：2025年度内审报告" />
+        </Form.Item>
+
+        <Form.Item label="入库模式">
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            <Radio.Group
+              value={searchable ? 'searchable' : 'preview_only'}
+              onChange={(event) => setSearchable(event.target.value === 'searchable')}
+              options={[
+                { label: '参与检索并支持预览', value: 'searchable' },
+                { label: '仅预览，不参与检索', value: 'preview_only' }
+              ]}
+            />
+            <Typography.Text type="secondary">
+              仅预览模式会保留目录和预览数据，但不会进入向量检索和图检索。
+            </Typography.Text>
+          </Space>
         </Form.Item>
 
         <Form.Item label="制度版本管理">

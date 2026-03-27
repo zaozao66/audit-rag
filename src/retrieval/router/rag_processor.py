@@ -120,8 +120,15 @@ class RAGProcessor:
         base = os.path.abspath(base_path or self.vector_store_path)
         return f"{base}.fulltext"
 
+    def _preview_store_dir(self, base_path: str = None) -> str:
+        base = os.path.abspath(base_path or self.vector_store_path)
+        return f"{base}.preview"
+
     def _full_text_path(self, doc_id: str, base_path: str = None) -> str:
         return os.path.join(self._full_text_store_dir(base_path), f"{doc_id}.txt")
+
+    def _preview_chunks_path(self, doc_id: str, base_path: str = None) -> str:
+        return os.path.join(self._preview_store_dir(base_path), f"{doc_id}.chunks.json")
 
     def _original_store_dir(self, base_path: str = None) -> str:
         base = os.path.abspath(base_path or self.vector_store_path)
@@ -165,6 +172,12 @@ class RAGProcessor:
         with open(path, "w", encoding="utf-8") as f:
             f.write(text or "")
 
+    def _save_preview_chunks(self, doc_id: str, chunks: List[Dict[str, Any]], base_path: str = None) -> None:
+        path = self._preview_chunks_path(doc_id, base_path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(chunks or [], f, ensure_ascii=False, indent=2)
+
     def _load_full_text(self, doc_id: str, base_path: str = None) -> Optional[str]:
         path = self._full_text_path(doc_id, base_path)
         if not os.path.exists(path):
@@ -176,8 +189,27 @@ class RAGProcessor:
             logger.warning("读取原文缓存失败: doc_id=%s err=%s", doc_id, e)
             return None
 
+    def _load_preview_chunks(self, doc_id: str, base_path: str = None) -> Optional[List[Dict[str, Any]]]:
+        path = self._preview_chunks_path(doc_id, base_path)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.warning("读取预览分块失败: doc_id=%s err=%s", doc_id, e)
+            return None
+
     def _delete_full_text(self, doc_id: str, base_path: str = None) -> bool:
         path = self._full_text_path(doc_id, base_path)
+        if not os.path.exists(path):
+            return False
+        os.remove(path)
+        return True
+
+    def _delete_preview_chunks(self, doc_id: str, base_path: str = None) -> bool:
+        path = self._preview_chunks_path(doc_id, base_path)
         if not os.path.exists(path):
             return False
         os.remove(path)
@@ -560,7 +592,42 @@ class RAGProcessor:
                 doc["char_count"] = len(doc.get("text", ""))
                 changed = True
 
+            if "searchable" not in doc:
+                doc["searchable"] = True
+                changed = True
+
         return changed
+
+    def _get_stored_document_chunks(self, doc_id: str) -> List[Dict[str, Any]]:
+        preview_chunks = self._load_preview_chunks(doc_id)
+        if preview_chunks is not None:
+            return preview_chunks
+
+        if not self.vector_store:
+            try:
+                self.load_vector_store(self.vector_store_path)
+            except Exception:
+                return []
+
+        if not self.vector_store:
+            return []
+
+        chunks = self.vector_store.get_document_chunks(doc_id)
+        if chunks:
+            self._save_preview_chunks(doc_id, chunks)
+        return chunks
+
+    def _remove_document_from_index(self, doc_id: str) -> int:
+        if not self.vector_store:
+            try:
+                self.load_vector_store(self.vector_store_path)
+            except Exception:
+                return 0
+
+        if not self.vector_store:
+            return 0
+
+        return self.vector_store.remove_document_chunks(doc_id)
 
     def _log_oversized_chunks(self, chunks: List[Dict[str, Any]], max_chars: int = EMBEDDING_INPUT_MAX_CHARS) -> None:
         oversized = []
@@ -596,7 +663,10 @@ class RAGProcessor:
         processed_count = 0
         skipped_count = 0
         updated_count = 0
-        pending_entries: List[Dict[str, Any]] = []
+        pending_new_entries: List[Dict[str, Any]] = []
+        pending_existing_updates: List[Dict[str, Any]] = []
+        pending_index_entries: List[Dict[str, Any]] = []
+        remove_from_index_ids: List[str] = []
 
         for doc in documents:
             content = doc["text"]
@@ -604,49 +674,47 @@ class RAGProcessor:
             doc_id = content_hash[:16]
             group_id, group_name, version_label = self._resolve_regulation_group_meta(doc)
             storage_file_id = str(doc.get("storage_file_id", "") or "").strip()
+            searchable = self._to_bool(doc.get("searchable", True))
+            doc["doc_id"] = doc_id
 
             existing = self.metadata_store.get_document(doc_id)
-            if existing and existing.status == "active":
-                if self._load_full_text(doc_id) is None:
-                    self._save_full_text(doc_id, content)
-                existing_path = str(existing.file_path or "").strip()
-                if (not existing_path or not os.path.exists(existing_path)) and not storage_file_id:
-                    persisted = self._persist_original_file(
-                        doc_id=doc_id,
-                        source_path=doc.get("file_path", ""),
-                        filename=doc.get("filename", ""),
-                    )
-                    if persisted:
-                        existing.file_path = persisted
-                metadata_changed = False
-                if storage_file_id and existing.storage_file_id != storage_file_id:
-                    existing.storage_file_id = storage_file_id
-                    metadata_changed = True
-                if group_id and existing.regulation_group_id != group_id:
-                    existing.regulation_group_id = group_id
-                    metadata_changed = True
-                if group_name and existing.regulation_group_name != group_name:
-                    existing.regulation_group_name = group_name
-                    metadata_changed = True
-                if version_label and existing.version_label != version_label:
-                    existing.version_label = version_label
-                    metadata_changed = True
-                if metadata_changed:
-                    self.metadata_store.save()
-                logger.info("文档已存在，跳过: %s", doc.get("filename", "unknown"))
-                skipped_count += 1
-                continue
-
-            doc["doc_id"] = doc_id
             chunks = self.chunker.chunk_documents([doc])
             chunks = self._normalize_chunks(chunks, doc_id)
+            for chunk in chunks:
+                chunk["searchable"] = searchable
+                chunk["status"] = "active"
             self._log_oversized_chunks(chunks)
 
             if not chunks:
                 logger.warning("文档未生成有效分块: %s", doc.get("filename", "unknown"))
                 continue
 
-            pending_entries.append({
+            self._save_full_text(doc_id, content)
+            self._save_preview_chunks(doc_id, chunks)
+
+            if existing and existing.status == "active":
+                was_searchable = bool(getattr(existing, "searchable", True))
+                if searchable and not was_searchable:
+                    pending_index_entries.append({
+                        "doc_id": doc_id,
+                        "chunks": chunks,
+                    })
+                elif was_searchable and not searchable:
+                    remove_from_index_ids.append(doc_id)
+
+                pending_existing_updates.append({
+                    "existing": existing,
+                    "doc": doc,
+                    "doc_id": doc_id,
+                    "group_id": group_id,
+                    "group_name": group_name,
+                    "version_label": version_label,
+                    "storage_file_id": storage_file_id,
+                    "searchable": searchable,
+                })
+                continue
+
+            entry = {
                 "doc": doc,
                 "doc_id": doc_id,
                 "content": content,
@@ -655,11 +723,19 @@ class RAGProcessor:
                 "group_id": group_id,
                 "group_name": group_name,
                 "version_label": version_label,
-            })
+                "storage_file_id": storage_file_id,
+                "searchable": searchable,
+            }
+            pending_new_entries.append(entry)
+            if searchable:
+                pending_index_entries.append({
+                    "doc_id": doc_id,
+                    "chunks": chunks,
+                })
 
-        if pending_entries:
+        if pending_index_entries:
             all_chunks: List[Dict[str, Any]] = []
-            for entry in pending_entries:
+            for entry in pending_index_entries:
                 all_chunks.extend(entry["chunks"])
 
             texts = [c["text"] for c in all_chunks]
@@ -673,52 +749,111 @@ class RAGProcessor:
                     self.vector_store = VectorStore(dimension=self.dimension)
 
             self.vector_store.add_embeddings(embeddings, all_chunks)
+        
+        index_changed = bool(pending_index_entries)
+        for doc_id in list(dict.fromkeys(remove_from_index_ids)):
+            removed = self._remove_document_from_index(doc_id)
+            if removed > 0:
+                index_changed = True
 
-            metadata_dirty = False
-            for entry in pending_entries:
-                doc = entry["doc"]
-                storage_file_id = str(doc.get("storage_file_id", "") or "").strip()
-                original_file_path = ""
-                if not storage_file_id:
-                    original_file_path = self._persist_original_file(
-                        doc_id=entry["doc_id"],
-                        source_path=doc.get("file_path", ""),
-                        filename=doc.get("filename", ""),
-                    ) or ""
-                record = DocumentRecord(
-                    doc_id=entry["doc_id"],
-                    filename=doc.get("filename", "unknown"),
-                    content_hash=entry["content_hash"],
-                    file_path=original_file_path or ("" if storage_file_id else doc.get("file_path", "")),
-                    file_size=len(entry["content"].encode("utf-8")),
-                    doc_type=doc.get("doc_type", "unknown"),
-                    upload_time=datetime.now().isoformat(),
-                    chunk_count=len(entry["chunks"]),
-                    regulation_group_id=str(entry.get("group_id", "") or ""),
-                    regulation_group_name=str(entry.get("group_name", "") or ""),
-                    version_label=str(entry.get("version_label", "") or ""),
-                    storage_file_id=storage_file_id,
+        metadata_dirty = False
+        for entry in pending_existing_updates:
+            existing = entry["existing"]
+            doc = entry["doc"]
+            doc_id = entry["doc_id"]
+            storage_file_id = entry["storage_file_id"]
+
+            metadata_changed = False
+            existing_path = str(existing.file_path or "").strip()
+            if (not existing_path or not os.path.exists(existing_path)) and not storage_file_id:
+                persisted = self._persist_original_file(
+                    doc_id=doc_id,
+                    source_path=doc.get("file_path", ""),
+                    filename=doc.get("filename", ""),
                 )
+                if persisted and existing.file_path != persisted:
+                    existing.file_path = persisted
+                    metadata_changed = True
 
-                is_new = self.metadata_store.add_document(record, save=False)
-                self._save_full_text(entry["doc_id"], entry["content"])
+            next_filename = str(doc.get("filename", "unknown") or "unknown")
+            if existing.filename != next_filename:
+                existing.filename = next_filename
+                metadata_changed = True
+
+            next_chunk_count = len(entry["chunks"])
+            if existing.chunk_count != next_chunk_count:
+                existing.chunk_count = next_chunk_count
+                metadata_changed = True
+
+            if existing.searchable != bool(entry["searchable"]):
+                existing.searchable = bool(entry["searchable"])
+                metadata_changed = True
+
+            if storage_file_id and existing.storage_file_id != storage_file_id:
+                existing.storage_file_id = storage_file_id
+                metadata_changed = True
+            if entry["group_id"] and existing.regulation_group_id != entry["group_id"]:
+                existing.regulation_group_id = entry["group_id"]
+                metadata_changed = True
+            if entry["group_name"] and existing.regulation_group_name != entry["group_name"]:
+                existing.regulation_group_name = entry["group_name"]
+                metadata_changed = True
+            if entry["version_label"] and existing.version_label != entry["version_label"]:
+                existing.version_label = entry["version_label"]
+                metadata_changed = True
+
+            if metadata_changed:
                 metadata_dirty = True
-                if is_new:
-                    processed_count += 1
-                    logger.info("新增文档: %s, chunks: %s", doc.get("filename", "unknown"), len(entry["chunks"]))
-                else:
-                    updated_count += 1
-                    logger.info("更新文档: %s", doc.get("filename", "unknown"))
+                updated_count += 1
+                logger.info("更新文档: %s", next_filename)
+            else:
+                skipped_count += 1
+                logger.info("文档已存在，跳过: %s", next_filename)
 
-            if metadata_dirty:
-                self.metadata_store.save()
+        for entry in pending_new_entries:
+            doc = entry["doc"]
+            storage_file_id = entry["storage_file_id"]
+            original_file_path = ""
+            if not storage_file_id:
+                original_file_path = self._persist_original_file(
+                    doc_id=entry["doc_id"],
+                    source_path=doc.get("file_path", ""),
+                    filename=doc.get("filename", ""),
+                ) or ""
+            record = DocumentRecord(
+                doc_id=entry["doc_id"],
+                filename=doc.get("filename", "unknown"),
+                content_hash=entry["content_hash"],
+                file_path=original_file_path or ("" if storage_file_id else doc.get("file_path", "")),
+                file_size=len(entry["content"].encode("utf-8")),
+                doc_type=doc.get("doc_type", "unknown"),
+                upload_time=datetime.now().isoformat(),
+                chunk_count=len(entry["chunks"]),
+                searchable=bool(entry["searchable"]),
+                regulation_group_id=str(entry.get("group_id", "") or ""),
+                regulation_group_name=str(entry.get("group_name", "") or ""),
+                version_label=str(entry.get("version_label", "") or ""),
+                storage_file_id=storage_file_id,
+            )
 
-        if self.vector_store:
+            is_new = self.metadata_store.add_document(record, save=False)
+            metadata_dirty = True
+            if is_new:
+                processed_count += 1
+                logger.info("新增文档: %s, chunks: %s, searchable=%s", doc.get("filename", "unknown"), len(entry["chunks"]), bool(entry["searchable"]))
+            else:
+                updated_count += 1
+                logger.info("更新文档: %s", doc.get("filename", "unknown"))
+
+        if metadata_dirty:
+            self.metadata_store.save()
+
+        if self.vector_store and index_changed:
             self.retriever = VectorRetriever(self.vector_store, self.embedding_provider)
             self._normalize_vector_documents()
             self.rebuild_graph_index(save=save_after_processing)
 
-        if save_after_processing and self.vector_store:
+        if save_after_processing and self.vector_store and index_changed:
             self.save_vector_store(self.vector_store_path)
 
         return {
@@ -740,6 +875,8 @@ class RAGProcessor:
         for r in results:
             doc = r.metadata or {}
             if doc.get("status") == "deleted":
+                continue
+            if doc.get("searchable") is False:
                 continue
             if not doc.get("text"):
                 continue
@@ -766,6 +903,8 @@ class RAGProcessor:
         for r in results:
             doc = r.metadata or {}
             if doc.get("status") == "deleted":
+                continue
+            if doc.get("searchable") is False:
                 continue
             if not doc.get("text"):
                 continue
@@ -2184,13 +2323,8 @@ class RAGProcessor:
         if not right_record or right_record.status != "active":
             raise ValueError("右侧文档不存在或已删除")
 
-        if not self.vector_store:
-            self.load_vector_store(self.vector_store_path)
-        if not self.vector_store:
-            raise ValueError("向量库未加载")
-
-        left_chunks = self.vector_store.get_document_chunks(left_id)
-        right_chunks = self.vector_store.get_document_chunks(right_id)
+        left_chunks = self._get_stored_document_chunks(left_id)
+        right_chunks = self._get_stored_document_chunks(right_id)
         if not left_chunks:
             raise ValueError("左侧文档没有可对比的分块")
         if not right_chunks:
@@ -2356,15 +2490,8 @@ class RAGProcessor:
                 if os.path.exists(fallback_original):
                     detail["file_path"] = fallback_original
 
-        if not self.vector_store:
-            try:
-                self.load_vector_store(self.vector_store_path)
-            except Exception:
-                # 文档详情在向量库不可用时仍可返回基础元数据
-                return detail
-
-        if self.vector_store:
-            chunks = self.vector_store.get_document_chunks(doc_id)
+        chunks = self._get_stored_document_chunks(doc_id)
+        if chunks:
             detail["chunks"] = chunks
 
         return detail
@@ -2674,13 +2801,9 @@ class RAGProcessor:
         if not record:
             return {"error": "文档不存在"}
 
-        if not self.vector_store:
-            try:
-                self.load_vector_store(self.vector_store_path)
-            except Exception as e:
-                return {"error": f"向量库未加载: {str(e)}"}
-
-        raw_chunks = self.vector_store.get_document_chunks(doc_id)
+        raw_chunks = self._get_stored_document_chunks(doc_id)
+        if not raw_chunks:
+            return {"error": "文档没有可用分块"}
         chunks, _, fallback_preview_lines = self._build_document_catalog_and_preview(raw_chunks)
         full_text_lines, full_text_line_pages, full_text_source = self._resolve_document_full_text(record)
         if not full_text_lines:
@@ -2734,6 +2857,7 @@ class RAGProcessor:
 
         removed_chunks = 0
         removed_full_text = self._delete_full_text(doc_id)
+        removed_preview_chunks = self._delete_preview_chunks(doc_id)
         removed_original_file = False
         original_path = str(record.file_path or "").strip() if record else ""
         if original_path and not os.path.isabs(original_path):
@@ -2756,6 +2880,7 @@ class RAGProcessor:
             "doc_id": doc_id,
             "removed_chunks": removed_chunks,
             "removed_full_text": removed_full_text,
+            "removed_preview_chunks": removed_preview_chunks,
             "removed_original_file": removed_original_file,
         }
 
@@ -2783,6 +2908,12 @@ class RAGProcessor:
             removed_full_text_files = sum(1 for name in os.listdir(full_text_dir) if name.endswith(".txt"))
             shutil.rmtree(full_text_dir, ignore_errors=True)
 
+        removed_preview_files = 0
+        preview_dir = self._preview_store_dir()
+        if os.path.isdir(preview_dir):
+            removed_preview_files = sum(1 for name in os.listdir(preview_dir) if name.endswith(".json"))
+            shutil.rmtree(preview_dir, ignore_errors=True)
+
         removed_original_files = 0
         original_dir = self._original_store_dir()
         if os.path.isdir(original_dir):
@@ -2796,6 +2927,7 @@ class RAGProcessor:
             "removed_deleted_documents": doc_stats.get("removed_deleted", 0),
             "removed_vector_files": removed_vector_files,
             "removed_full_text_files": removed_full_text_files,
+            "removed_preview_files": removed_preview_files,
             "removed_original_files": removed_original_files,
         }
 

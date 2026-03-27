@@ -77,6 +77,13 @@ class VectorStore:
             idx = indices[0][i]
             if idx < len(self.documents) and idx != -1:
                 doc = self.documents[idx]
+
+                if doc.get('status') == 'deleted':
+                    continue
+                if doc.get('searchable') is False:
+                    continue
+                if not doc.get('text'):
+                    continue
                 
                 # 应用过滤条件
                 if doc_types and doc.get('doc_type') not in doc_types:

@@ -67,7 +67,8 @@ export function RegulationComparePage() {
   const [rightCatalog, setRightCatalog] = useState<DocumentCatalogItem[]>([]);
   const [activeLeftCatalogId, setActiveLeftCatalogId] = useState('');
   const [activeRightCatalogId, setActiveRightCatalogId] = useState('');
-  const [activeArticleKey, setActiveArticleKey] = useState('');
+  const [activeLeftArticleKey, setActiveLeftArticleKey] = useState('');
+  const [activeRightArticleKey, setActiveRightArticleKey] = useState('');
 
   const leftRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const rightRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -204,7 +205,8 @@ export function RegulationComparePage() {
     const firstArticle = result?.diffs?.[0]?.article_key || '';
     setActiveLeftCatalogId(firstLeftCatalog);
     setActiveRightCatalogId(firstRightCatalog);
-    setActiveArticleKey(firstArticle);
+    setActiveLeftArticleKey(firstArticle);
+    setActiveRightArticleKey(firstArticle);
   }, [result, leftCatalog, rightCatalog]);
 
   const compareItems = useMemo(() => result?.diffs || [], [result]);
@@ -373,7 +375,7 @@ export function RegulationComparePage() {
     if (String(entry.old_text || '').trim()) {
       leftRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-    setActiveArticleKey(articleKey);
+    setActiveLeftArticleKey(articleKey);
   };
 
   const jumpByRightCatalog = (catalog: DocumentCatalogItem) => {
@@ -403,11 +405,15 @@ export function RegulationComparePage() {
     if (String(entry.new_text || '').trim()) {
       rightRefs.current[articleKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-    setActiveArticleKey(articleKey);
+    setActiveRightArticleKey(articleKey);
   };
 
-  const onEntryClick = (articleKey: string) => {
-    setActiveArticleKey(articleKey);
+  const onEntryClick = (articleKey: string, side: 'left' | 'right') => {
+    if (side === 'left') {
+      setActiveLeftArticleKey(articleKey);
+    } else {
+      setActiveRightArticleKey(articleKey);
+    }
     const leftCatalogId = firstLeftCatalogIdByArticleKey.get(articleKey);
     if (leftCatalogId) {
       setActiveLeftCatalogId(leftCatalogId);
@@ -503,9 +509,6 @@ export function RegulationComparePage() {
                             >
                               <div className="catalog-row">
                                 <Typography.Text ellipsis>{catalog.title}</Typography.Text>
-                                <Typography.Text type="secondary" className="catalog-line-no">
-                                  {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
-                                </Typography.Text>
                               </div>
                             </List.Item>
                           )}
@@ -523,8 +526,8 @@ export function RegulationComparePage() {
                           ref={(el) => {
                             leftRefs.current[item.article_key] = el;
                           }}
-                          className={`compare-entry ${activeArticleKey === item.article_key ? 'active' : ''}`}
-                          onClick={() => onEntryClick(item.article_key)}
+                          className={`compare-entry ${activeLeftArticleKey === item.article_key ? 'active' : ''}`}
+                          onClick={() => onEntryClick(item.article_key, 'left')}
                         >
                           <Space wrap size={8} style={{ marginBottom: 6 }}>
                             <Typography.Text strong>{formatArticleDisplayText(item.article_no)}</Typography.Text>
@@ -546,8 +549,8 @@ export function RegulationComparePage() {
                           ref={(el) => {
                             rightRefs.current[item.article_key] = el;
                           }}
-                          className={`compare-entry ${activeArticleKey === item.article_key ? 'active' : ''}`}
-                          onClick={() => onEntryClick(item.article_key)}
+                          className={`compare-entry ${activeRightArticleKey === item.article_key ? 'active' : ''}`}
+                          onClick={() => onEntryClick(item.article_key, 'right')}
                         >
                           <Space wrap size={8} style={{ marginBottom: 6 }}>
                             <Typography.Text strong>{formatArticleDisplayText(item.article_no)}</Typography.Text>
@@ -577,9 +580,6 @@ export function RegulationComparePage() {
                             >
                               <div className="catalog-row">
                                 <Typography.Text ellipsis>{catalog.title}</Typography.Text>
-                                <Typography.Text type="secondary" className="catalog-line-no">
-                                  {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
-                                </Typography.Text>
                               </div>
                             </List.Item>
                           )}

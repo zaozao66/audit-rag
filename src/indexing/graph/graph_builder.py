@@ -29,6 +29,8 @@ class GraphBuilder:
         for doc in documents:
             if doc.get("status") == "deleted":
                 continue
+            if doc.get("searchable") is False:
+                continue
 
             text = str(doc.get("text", "")).strip()
             if not text:

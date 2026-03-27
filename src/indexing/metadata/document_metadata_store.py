@@ -25,6 +25,7 @@ class DocumentRecord:
     upload_time: str               # 上传时间
     chunk_count: int               # 分块数量
     status: str = "active"         # active/deleted
+    searchable: bool = True        # 是否参与检索
     version: int = 1               # 版本号
     tags: List[str] = field(default_factory=list)  # 标签
     regulation_group_id: str = ""  # 同一制度分组ID
@@ -92,6 +93,7 @@ class DocumentMetadataStore:
             existing.upload_time = record.upload_time
             existing.chunk_count = record.chunk_count
             existing.status = "active"
+            existing.searchable = bool(record.searchable)
             existing.file_path = record.file_path
             existing.filename = record.filename
             if record.storage_file_id:

@@ -35,6 +35,7 @@ export function uploadFiles(payload: {
   docType: string;
   title?: string;
   saveAfterProcessing?: boolean;
+  searchable?: boolean;
   regulationGroup?: RegulationGroupOptions;
 }) {
   const form = new FormData();
@@ -42,6 +43,7 @@ export function uploadFiles(payload: {
   form.append('chunker_type', payload.chunkerType);
   form.append('doc_type', payload.docType);
   form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
+  form.append('searchable', String(payload.searchable ?? true));
   if (payload.title?.trim()) {
     form.append('title', payload.title.trim());
   }
@@ -70,6 +72,7 @@ export function uploadArchive(payload: {
   docType: string;
   title?: string;
   saveAfterProcessing?: boolean;
+  searchable?: boolean;
   regulationGroup?: RegulationGroupOptions;
 }) {
   const form = new FormData();
@@ -77,6 +80,7 @@ export function uploadArchive(payload: {
   form.append('chunker_type', payload.chunkerType);
   form.append('doc_type', payload.docType);
   form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
+  form.append('searchable', String(payload.searchable ?? true));
   if (payload.title?.trim()) {
     form.append('title', payload.title.trim());
   }

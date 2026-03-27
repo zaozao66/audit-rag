@@ -144,6 +144,7 @@ export interface DocumentRecord {
   upload_time: string;
   chunk_count: number;
   status: 'active' | 'deleted';
+  searchable: boolean;
   version: number;
   tags: string[];
   regulation_group_id: string;
