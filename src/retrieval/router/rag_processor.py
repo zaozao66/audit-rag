@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import re
@@ -172,11 +173,60 @@ class RAGProcessor:
         with open(path, "w", encoding="utf-8") as f:
             f.write(text or "")
 
+    def _format_preview_chunks(self, doc_id: str, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        formatted: List[Dict[str, Any]] = []
+        for idx, chunk in enumerate(chunks or []):
+            metadata = chunk.get("metadata", {}) or {}
+            text = str(chunk.get("text", "") or "")
+            chunk_index = chunk.get("chunk_index")
+            if chunk_index is None:
+                chunk_index = idx
+            try:
+                chunk_index = int(chunk_index)
+            except (TypeError, ValueError):
+                chunk_index = idx
+
+            global_index = chunk.get("global_index")
+            if global_index is None:
+                global_index = chunk_index
+            try:
+                global_index = int(global_index)
+            except (TypeError, ValueError):
+                global_index = chunk_index
+
+            page_nos = metadata.get("page_nos")
+            if page_nos is None:
+                page_nos = chunk.get("page_nos", [])
+
+            section_path = metadata.get("section_path")
+            if section_path is None:
+                section_path = chunk.get("section_path", [])
+
+            formatted.append(
+                {
+                    "chunk_index": chunk_index,
+                    "chunk_id": str(chunk.get("chunk_id", "") or f"{doc_id}_chunk_{idx}"),
+                    "text": text,
+                    "text_preview": chunk.get("text_preview") or (text[:200] + "..." if len(text) > 200 else text),
+                    "char_count": int(chunk.get("char_count", len(text)) or len(text)),
+                    "global_index": global_index,
+                    "metadata": {
+                        "filename": metadata.get("filename", chunk.get("filename", "")),
+                        "doc_type": metadata.get("doc_type", chunk.get("doc_type", "")),
+                        "page_nos": page_nos or [],
+                        "header": metadata.get("header", chunk.get("header", "")),
+                        "section_path": section_path or [],
+                        "semantic_boundary": metadata.get("semantic_boundary", chunk.get("semantic_boundary", "")),
+                    },
+                }
+            )
+        return formatted
+
     def _save_preview_chunks(self, doc_id: str, chunks: List[Dict[str, Any]], base_path: str = None) -> None:
         path = self._preview_chunks_path(doc_id, base_path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(chunks or [], f, ensure_ascii=False, indent=2)
+            json.dump(self._format_preview_chunks(doc_id, chunks), f, ensure_ascii=False, indent=2)
 
     def _load_full_text(self, doc_id: str, base_path: str = None) -> Optional[str]:
         path = self._full_text_path(doc_id, base_path)
@@ -196,7 +246,12 @@ class RAGProcessor:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return data if isinstance(data, list) else []
+            if not isinstance(data, list):
+                return []
+            normalized = self._format_preview_chunks(doc_id, data)
+            if normalized != data:
+                self._save_preview_chunks(doc_id, normalized, base_path=base_path)
+            return normalized
         except Exception as e:
             logger.warning("读取预览分块失败: doc_id=%s err=%s", doc_id, e)
             return None
