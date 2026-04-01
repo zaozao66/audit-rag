@@ -350,8 +350,55 @@ export interface DeleteStoredFileResponse {
   original_filename: string;
 }
 
+export interface DeleteStoredFilesResponse {
+  success: boolean;
+  requested_count: number;
+  deleted_count: number;
+  failed_count: number;
+  deleted: Array<{
+    success: boolean;
+    file_id: string;
+    original_filename: string;
+  }>;
+  failed: Array<{
+    file_id: string;
+    error: string;
+  }>;
+}
+
 export interface UploadStoredFilesResponse {
   success: boolean;
   count: number;
   records: StoredFileRecord[];
+}
+
+export interface StoredUploadSessionInfo {
+  upload_id: string;
+  domain: string;
+  original_filename: string;
+  content_type: string;
+  file_size: number;
+  total_chunks: number;
+  chunk_size: number;
+  created_at: string;
+  updated_at: string;
+  uploaded_chunk_count: number;
+  completed: boolean;
+  missing_chunks: number[];
+}
+
+export interface StoredUploadSessionResponse {
+  success: boolean;
+  upload: StoredUploadSessionInfo;
+}
+
+export interface StoredFileUploadProgress {
+  fileIndex: number;
+  totalFiles: number;
+  fileName: string;
+  uploadedBytes: number;
+  totalBytes: number;
+  overallUploadedBytes: number;
+  overallBytes: number;
+  percent: number;
 }

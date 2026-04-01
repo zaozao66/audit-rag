@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -31,17 +31,32 @@ class MediaStore:
         self._cleanup_counter = 0
         os.makedirs(self.base_dir, exist_ok=True)
 
-    def build_cache_key(self, text: str, provider: str, model: str, voice: str, audio_format: str, sample_rate: int) -> str:
-        raw = "||".join(
-            [
-                provider.strip().lower(),
-                model.strip().lower(),
-                voice.strip().lower(),
-                audio_format.strip().lower(),
-                str(sample_rate),
-                text.strip(),
-            ]
-        )
+    def build_cache_key(
+        self,
+        text: str,
+        provider: str,
+        model: str,
+        voice: str,
+        audio_format: str,
+        sample_rate: int,
+        extra_fields: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        parts = [
+            provider.strip().lower(),
+            model.strip().lower(),
+            voice.strip().lower(),
+            audio_format.strip().lower(),
+            str(sample_rate),
+        ]
+        normalized_extra_fields = []
+        for key, value in sorted((extra_fields or {}).items()):
+            normalized_value = str(value or "").strip()
+            if not normalized_value:
+                continue
+            normalized_extra_fields.append(f"{str(key).strip().lower()}={normalized_value}")
+        parts.extend(normalized_extra_fields)
+        parts.append(text.strip())
+        raw = "||".join(parts)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def ensure_audio(self, scope: str, cache_key: str, audio_format: str, audio_bytes: Optional[bytes]) -> MediaItem:

@@ -93,7 +93,10 @@
     "file_storage": {
       "storageType": "local",
       "localRootDir": "./appData",
-      "metadataPath": "./appData/file_storage_metadata.json"
+      "metadataPath": "./appData/file_storage_metadata.json",
+      "uploadTempDir": "./appData/upload_sessions",
+      "uploadSessionTtlHours": 24,
+      "chunkUploadSizeBytes": 8388608
     },
     "default_scope": "audit",
     "scope_required": false,
@@ -192,10 +195,10 @@
         "max_chars": 1200
       },
       "tts": {
-        "provider": "qwen",
-        "model": "qwen3-tts-flash-2025-11-27",
-        "default_voice": "Cherry",
-        "default_format": "mp3",
+        "provider": "nucc_tts",
+        "model": "qwen3-tts",
+        "default_voice": "Uncle_Fu",
+        "default_format": "wav",
         "default_sample_rate": 24000,
         "request_timeout": 20,
         "ssl_verify": false,
@@ -204,10 +207,14 @@
         "cache_ttl_hours": 48,
         "cache_max_disk_mb": 2048,
         "providers": {
-          "qwen": {
-            "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "nucc_tts": {
+            "endpoint": "https://ai-llm.nucc.com/v1",
             "api_key": "YOUR_PRODUCTION_API_KEY_HERE",
-            "model": "qwen3-tts-flash-2025-11-27"
+            "model": "qwen3-tts",
+            "default_voice": "Uncle_Fu",
+            "task_type": "VoiceDesign",
+            "language": "Chinese",
+            "instructions": "用播音员播报的语气"
           },
           "cosyvoice": {
             "endpoint": "http://cosyvoice-internal:9880",
@@ -226,6 +233,9 @@
       "storageType": "minio",
       "localRootDir": "./appData",
       "metadataPath": "./appData/file_storage_metadata.json",
+      "uploadTempDir": "./appData/upload_sessions",
+      "uploadSessionTtlHours": 24,
+      "chunkUploadSizeBytes": 8388608,
       "minioEndpoint": "https://minio.example.com",
       "minioAccessKey": "YOUR_MINIO_ACCESS_KEY",
       "minioSecretKey": "YOUR_MINIO_SECRET_KEY",

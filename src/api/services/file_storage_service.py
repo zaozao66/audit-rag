@@ -513,3 +513,47 @@ class UnifiedFileStorageService:
             "file_id": record.file_id,
             "original_filename": record.original_filename,
         }
+
+    def delete_files(self, file_ids: List[str]) -> Dict[str, object]:
+        normalized_ids = []
+        seen = set()
+        for file_id in file_ids or []:
+            normalized = str(file_id or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_ids.append(normalized)
+
+        if not normalized_ids:
+            raise ValueError("缺少有效的 file_ids")
+
+        deleted: List[Dict[str, object]] = []
+        failed: List[Dict[str, object]] = []
+        for file_id in normalized_ids:
+            try:
+                result = self.delete_file(file_id)
+                deleted.append(result)
+            except FileRecordNotFoundError:
+                failed.append({
+                    "file_id": file_id,
+                    "error": FILE_NOT_FOUND_MESSAGE,
+                })
+            except FileBlobMissingError:
+                failed.append({
+                    "file_id": file_id,
+                    "error": FILE_BLOB_MISSING_MESSAGE,
+                })
+            except FileStorageError as e:
+                failed.append({
+                    "file_id": file_id,
+                    "error": str(e),
+                })
+
+        return {
+            "success": len(failed) == 0,
+            "requested_count": len(normalized_ids),
+            "deleted_count": len(deleted),
+            "failed_count": len(failed),
+            "deleted": deleted,
+            "failed": failed,
+        }

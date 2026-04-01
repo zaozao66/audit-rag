@@ -25,6 +25,9 @@ export function synthesizeSpeech(payload: {
   voice?: string;
   format?: string;
   sampleRate?: number;
+  taskType?: string;
+  language?: string;
+  instructions?: string;
   sessionId?: string;
   messageId?: string;
 }) {
@@ -37,6 +40,9 @@ export function synthesizeSpeech(payload: {
       voice: payload.voice,
       format: payload.format,
       sample_rate: payload.sampleRate,
+      task_type: payload.taskType,
+      language: payload.language,
+      instructions: payload.instructions,
       response_mode: 'url',
       session_id: payload.sessionId,
       message_id: payload.messageId,

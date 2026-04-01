@@ -14,6 +14,10 @@ from src.audio.services.media_store import MediaStore
 from src.audio.services.speech_script_service import SpeechScriptService
 from src.audio.services.tts_service import TTSService
 from src.api.services.file_storage_service import UnifiedFileStorageService
+from src.api.services.file_upload_session_service import (
+    FileUploadSessionService,
+    build_default_upload_temp_dir,
+)
 from src.core.factory import RAGFactory
 from src.api.services.conversation_service import ConversationService
 from src.api.services.rag_service import RAGService
@@ -107,6 +111,20 @@ def create_app() -> Flask:
     app.extensions['file_storage_service'] = UnifiedFileStorageService(
         config=storage_cfg,
         environment=str(config.get('environment', 'development')),
+    )
+    upload_temp_dir = str(
+        storage_cfg.get('uploadTempDir')
+        or storage_cfg.get('upload_temp_dir')
+        or build_default_upload_temp_dir(storage_cfg.get('localRootDir') or storage_cfg.get('local_root_dir'))
+    ).strip()
+    app.extensions['file_upload_session_service'] = FileUploadSessionService(
+        base_dir=upload_temp_dir,
+        session_ttl_hours=int(storage_cfg.get('uploadSessionTtlHours') or storage_cfg.get('upload_session_ttl_hours') or 24),
+        max_chunk_size_bytes=int(
+            storage_cfg.get('chunkUploadSizeBytes')
+            or storage_cfg.get('chunk_upload_size_bytes')
+            or 8 * 1024 * 1024
+        ),
     )
 
     audio_cfg = config.get('audio', {}) if isinstance(config.get('audio'), dict) else {}

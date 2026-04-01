@@ -2,8 +2,8 @@ import { DeleteOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/ic
 import { Alert, Button, Card, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { deleteStoredFile, getStoredFileUrl, listStoredFiles } from '../api/rag';
-import type { StoredFileRecord } from '../types/rag';
+import { deleteStoredFile, deleteStoredFiles, getStoredFileUrl, listStoredFiles } from '../api/rag';
+import type { DeleteStoredFilesResponse, StoredFileRecord } from '../types/rag';
 
 interface FileStoragePanelProps {
   scope: 'audit' | 'discipline';
@@ -31,6 +31,7 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
 
   const [domain, setDomain] = useState<string>('all');
   const [fileType, setFileType] = useState<string>('');
@@ -50,6 +51,7 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
       });
       setItems(result.items || []);
       setTotal(result.total || 0);
+      setSelectedRowKeys([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载统一文件列表失败');
     } finally {
@@ -66,6 +68,7 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
     setError('');
     try {
       await deleteStoredFile(fileId);
+      setSelectedRowKeys((prev) => prev.filter((item) => item !== fileId));
       if (items.length === 1 && page > 1) {
         setPage((prev) => prev - 1);
       } else {
@@ -73,6 +76,35 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除文件失败');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const onBatchDelete = async () => {
+    const fileIds = selectedRowKeys.map((item) => String(item)).filter(Boolean);
+    if (fileIds.length === 0) {
+      setError('请先选择要删除的文件');
+      return;
+    }
+
+    setWorking(true);
+    setError('');
+    try {
+      const result = await deleteStoredFiles(fileIds);
+      setSelectedRowKeys([]);
+      if (result.failed_count > 0) {
+        setError(buildBatchDeleteMessage(result));
+      }
+
+      const shouldMovePrevPage = items.length === result.deleted_count && page > 1 && result.failed_count === 0;
+      if (shouldMovePrevPage) {
+        setPage((prev) => prev - 1);
+      } else {
+        await loadFiles();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '批量删除文件失败');
     } finally {
       setWorking(false);
     }
@@ -157,6 +189,8 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
     }
   ];
 
+  const selectedCount = selectedRowKeys.length;
+
   return (
     <Card
       title="统一文件管理"
@@ -200,6 +234,24 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
           placeholder="按文件名模糊搜索"
           style={{ width: 280 }}
         />
+        <Popconfirm
+          title="确认批量删除选中文件？"
+          description="将同时删除底层文件和元数据，且不可恢复。"
+          onConfirm={() => {
+            void onBatchDelete();
+          }}
+          okButtonProps={{ danger: true }}
+          disabled={selectedCount === 0 || working}
+        >
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={selectedCount === 0}
+            loading={working}
+          >
+            批量删除{selectedCount > 0 ? ` (${selectedCount})` : ''}
+          </Button>
+        </Popconfirm>
       </Space>
 
       {error ? <Alert style={{ marginBottom: 12 }} type="error" showIcon message={error} /> : null}
@@ -210,6 +262,10 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
         dataSource={items}
         columns={columns}
         size="small"
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (nextSelectedRowKeys) => setSelectedRowKeys(nextSelectedRowKeys.map((item) => String(item)))
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -228,4 +284,15 @@ export function FileStoragePanel({ scope }: FileStoragePanelProps) {
       />
     </Card>
   );
+}
+
+function buildBatchDeleteMessage(result: DeleteStoredFilesResponse): string {
+  if (result.failed_count <= 0) {
+    return '';
+  }
+  const details = result.failed
+    .slice(0, 5)
+    .map((item) => `${item.file_id}: ${item.error}`)
+    .join('；');
+  return `批量删除完成，成功 ${result.deleted_count} 个，失败 ${result.failed_count} 个。${details}`;
 }

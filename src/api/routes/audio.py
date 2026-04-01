@@ -63,6 +63,9 @@ def synthesize_speech():
             audio_format=data.get("format") or data.get("response_format"),
             sample_rate=data.get("sample_rate"),
             speed=data.get("speed"),
+            task_type=data.get("task_type"),
+            language=data.get("language"),
+            instructions=data.get("instructions"),
             session_id=data.get("session_id"),
             message_id=data.get("message_id"),
         )

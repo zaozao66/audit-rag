@@ -6,6 +6,7 @@ from src.indexing.vector.vector_store import VectorStore
 from src.audio.providers.base import BaseTTSProvider
 from src.audio.providers.cosyvoice_provider import CosyVoiceProvider
 from src.audio.providers.melo_tts_provider import MeloTTSProvider
+from src.audio.providers.nucc_tts_provider import NUCCTTSProvider
 from src.audio.providers.qwen_tts_provider import QwenTTSProvider
 from src.retrieval.rerank.rerank_provider import AliyunRerankProvider
 from src.llm.providers.llm_provider import create_llm_provider
@@ -73,10 +74,15 @@ class RAGFactory:
             "request_timeout": provider_cfg.get("request_timeout", tts_cfg.get("request_timeout", 20.0)),
             "path": provider_cfg.get("path", tts_cfg.get("path", "/tts")),
             "default_voice": provider_cfg.get("default_voice", tts_cfg.get("default_voice", "Cherry")),
+            "task_type": provider_cfg.get("task_type") or tts_cfg.get("task_type"),
+            "language": provider_cfg.get("language") or tts_cfg.get("language"),
+            "instructions": provider_cfg.get("instructions") or tts_cfg.get("instructions"),
         }
 
         if provider_name == "qwen":
             return QwenTTSProvider(merged_cfg, logger=logger)
+        if provider_name in {"nucc", "nucc_tts"}:
+            return NUCCTTSProvider(merged_cfg, logger=logger)
         if provider_name == "cosyvoice":
             return CosyVoiceProvider(merged_cfg, logger=logger)
         if provider_name in {"melotts", "melo"}:

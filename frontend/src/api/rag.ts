@@ -7,6 +7,7 @@ import type {
   DocumentDetailResponse,
   DocumentIdByFilenameResponse,
   DeleteStoredFileResponse,
+  DeleteStoredFilesResponse,
   InfoResponse,
   ListStoredFilesResponse,
   ListDocumentsResponse,
@@ -16,6 +17,8 @@ import type {
   RegulationCompareResponse,
   SearchWithIntentResponse,
   CitationItem,
+  StoredFileUploadProgress,
+  StoredUploadSessionResponse,
   StreamCitationsEvent,
   StreamProgressEvent,
   StreamSessionEvent,
@@ -24,6 +27,8 @@ import type {
   UploadStoredFilesResponse,
   RetrievalOptions
 } from '../types/rag';
+
+const STORED_FILE_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
 
 export function getInfo() {
   return apiFetch<InfoResponse>('/info');
@@ -315,20 +320,133 @@ export function getDocumentStats() {
   return apiFetch<StatsResponse>('/documents/stats');
 }
 
-export function uploadStoredFiles(payload: { files: File[]; scope?: string }) {
-  const form = new FormData();
-  payload.files.forEach((file) => form.append('files', file));
-  if (payload.scope?.trim()) {
-    form.append('domain', payload.scope.trim());
+export async function uploadStoredFiles(payload: {
+  files: File[];
+  scope?: string;
+  onProgress?: (progress: StoredFileUploadProgress) => void;
+}) {
+  const records = [];
+  const scope = payload.scope?.trim().toLowerCase();
+  const totalFiles = payload.files.length;
+  const overallBytes = payload.files.reduce((sum, file) => sum + Math.max(0, file.size || 0), 0);
+  let completedBytes = 0;
+
+  for (let fileIndex = 0; fileIndex < payload.files.length; fileIndex += 1) {
+    const file = payload.files[fileIndex];
+    const reportProgress = (uploadedBytes: number) => {
+      const safeUploadedBytes = Math.max(0, Math.min(uploadedBytes, file.size || 0));
+      const overallUploadedBytes = completedBytes + safeUploadedBytes;
+      payload.onProgress?.({
+        fileIndex,
+        totalFiles,
+        fileName: file.name,
+        uploadedBytes: safeUploadedBytes,
+        totalBytes: file.size || 0,
+        overallUploadedBytes,
+        overallBytes,
+        percent: overallBytes > 0 ? Math.round((overallUploadedBytes / overallBytes) * 100) : 100
+      });
+    };
+
+    reportProgress(0);
+    const record = file.size > STORED_FILE_CHUNK_SIZE_BYTES
+      ? await uploadStoredFileInChunks(file, scope, reportProgress)
+      : await uploadStoredFileDirect(file, scope);
+    completedBytes += file.size || 0;
+    reportProgress(file.size || 0);
+    records.push(record);
   }
 
-  return apiFetch<UploadStoredFilesResponse>('/files/upload', {
+  return {
+    success: true,
+    count: records.length,
+    records
+  } satisfies UploadStoredFilesResponse;
+}
+
+async function uploadStoredFileDirect(file: File, scope?: string) {
+  const form = new FormData();
+  form.append('files', file);
+  if (scope) {
+    form.append('domain', scope);
+  }
+
+  const response = await apiFetch<UploadStoredFilesResponse>('/files/upload', {
     method: 'POST',
-    headers: payload.scope?.trim()
-      ? { 'X-Knowledge-Scope': payload.scope.trim().toLowerCase() }
-      : undefined,
+    headers: scope ? { 'X-Knowledge-Scope': scope } : undefined,
     body: form
   });
+  if (!response.records.length) {
+    throw new Error('上传成功但未返回文件记录');
+  }
+  return response.records[0];
+}
+
+async function uploadStoredFileInChunks(
+  file: File,
+  scope: string | undefined,
+  onProgress?: (uploadedBytes: number) => void
+) {
+  const totalChunks = Math.max(1, Math.ceil((file.size || 0) / STORED_FILE_CHUNK_SIZE_BYTES));
+  const initResponse = await apiFetch<StoredUploadSessionResponse>('/files/upload/init', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(scope ? { 'X-Knowledge-Scope': scope } : {})
+    },
+    body: JSON.stringify({
+      filename: file.name,
+      file_size: file.size || 0,
+      total_chunks: totalChunks,
+      content_type: file.type || 'application/octet-stream',
+      chunk_size: STORED_FILE_CHUNK_SIZE_BYTES,
+      domain: scope
+    })
+  });
+
+  const uploadId = initResponse.upload.upload_id;
+
+  try {
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const start = chunkIndex * STORED_FILE_CHUNK_SIZE_BYTES;
+      const end = Math.min(start + STORED_FILE_CHUNK_SIZE_BYTES, file.size || 0);
+      const chunk = file.slice(start, end);
+      const form = new FormData();
+      form.append('upload_id', uploadId);
+      form.append('chunk_index', String(chunkIndex));
+      form.append('chunk', chunk, `${file.name}.part${chunkIndex}`);
+
+      await apiFetch<StoredUploadSessionResponse>('/files/upload/chunk', {
+        method: 'POST',
+        headers: scope ? { 'X-Knowledge-Scope': scope } : undefined,
+        body: form
+      });
+      onProgress?.(end);
+    }
+
+    const completeResponse = await apiFetch<UploadStoredFilesResponse>('/files/upload/complete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(scope ? { 'X-Knowledge-Scope': scope } : {})
+      },
+      body: JSON.stringify({ upload_id: uploadId })
+    });
+    if (!completeResponse.records.length) {
+      throw new Error('分片上传完成但未返回文件记录');
+    }
+    return completeResponse.records[0];
+  } catch (error) {
+    try {
+      await apiFetch<{ success: boolean; upload_id: string }>(`/files/upload/${encodeURIComponent(uploadId)}`, {
+        method: 'DELETE',
+        headers: scope ? { 'X-Knowledge-Scope': scope } : undefined
+      });
+    } catch {
+      // Ignore abort failure and preserve the original error.
+    }
+    throw error;
+  }
 }
 
 export function listStoredFiles(params?: {
@@ -350,6 +468,14 @@ export function listStoredFiles(params?: {
 export function deleteStoredFile(fileId: string) {
   return apiFetch<DeleteStoredFileResponse>(`/files/${encodeURIComponent(fileId)}`, {
     method: 'DELETE'
+  });
+}
+
+export function deleteStoredFiles(fileIds: string[]) {
+  return apiFetch<DeleteStoredFilesResponse>('/files', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_ids: fileIds })
   });
 }
 

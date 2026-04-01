@@ -1,5 +1,5 @@
 import { InboxOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Radio, Space, Typography, Upload } from 'antd';
+import { Alert, Button, Card, Progress, Radio, Space, Typography, Upload } from 'antd';
 import type { UploadChangeParam, UploadFile } from 'antd/es/upload/interface';
 import { useMemo, useState } from 'react';
 import { uploadStoredFiles } from '../api/rag';
@@ -19,6 +19,8 @@ export function FileStorageUploadPanel({ scope }: FileStorageUploadPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<UploadStoredFilesResponse | null>(null);
+  const [progressPercent, setProgressPercent] = useState<number | null>(null);
+  const [progressText, setProgressText] = useState('');
 
   const files = useMemo(
     () => fileList.map((item) => item.originFileObj).filter(Boolean) as File[],
@@ -33,12 +35,28 @@ export function FileStorageUploadPanel({ scope }: FileStorageUploadPanelProps) {
 
     setLoading(true);
     setError('');
+    setResult(null);
+    setProgressPercent(0);
+    setProgressText('准备上传...');
     try {
-      const data = await uploadStoredFiles({ files, scope: domain });
+      const data = await uploadStoredFiles({
+        files,
+        scope: domain,
+        onProgress: (progress) => {
+          setProgressPercent(progress.percent);
+          setProgressText(
+            `正在上传 ${progress.fileIndex + 1}/${progress.totalFiles}: ${progress.fileName} (${progress.percent}%)`
+          );
+        }
+      });
       setResult(data);
       setFileList([]);
+      setProgressPercent(100);
+      setProgressText('上传完成');
     } catch (err) {
       setError(err instanceof Error ? err.message : '上传失败');
+      setProgressText('');
+      setProgressPercent(null);
     } finally {
       setLoading(false);
     }
@@ -80,6 +98,13 @@ export function FileStorageUploadPanel({ scope }: FileStorageUploadPanelProps) {
           </Button>
           <Typography.Text type="secondary">已选 {files.length} 个文件</Typography.Text>
         </Space>
+
+        {progressPercent !== null ? (
+          <Space direction="vertical" style={{ width: '100%' }} size={4}>
+            <Typography.Text type="secondary">{progressText}</Typography.Text>
+            <Progress percent={progressPercent} size="small" status={error ? 'exception' : undefined} />
+          </Space>
+        ) : null}
 
         {error ? <Alert type="error" showIcon message={error} /> : null}
         {result ? (

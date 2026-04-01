@@ -56,6 +56,9 @@ class TTSService:
         audio_format: Optional[str] = None,
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
+        task_type: Optional[str] = None,
+        language: Optional[str] = None,
+        instructions: Optional[str] = None,
         session_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> SynthesizedAudio:
@@ -66,6 +69,8 @@ class TTSService:
         final_model = str(model or self.default_model)
         final_voice = str(voice or self.default_voice)
         final_format = str(audio_format or self.default_format).lower()
+        if self.provider_name in {"nucc", "nucc_tts"}:
+            final_format = "wav"
         final_sample_rate = int(sample_rate or self.default_sample_rate)
         final_speed = float(speed or 1.0)
 
@@ -76,6 +81,11 @@ class TTSService:
             voice=final_voice,
             audio_format=final_format,
             sample_rate=final_sample_rate,
+            extra_fields={
+                "task_type": task_type,
+                "language": language,
+                "instructions": instructions,
+            },
         )
 
         try:
@@ -109,6 +119,9 @@ class TTSService:
                 audio_format=final_format,
                 sample_rate=final_sample_rate,
                 speed=final_speed,
+                task_type=task_type,
+                language=language,
+                instructions=instructions,
                 timeout_sec=self.request_timeout,
                 session_id=session_id,
                 message_id=message_id,

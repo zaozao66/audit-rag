@@ -11,6 +11,9 @@ class TTSRequest:
     audio_format: str = "mp3"
     sample_rate: int = 24000
     speed: float = 1.0
+    task_type: Optional[str] = None
+    language: Optional[str] = None
+    instructions: Optional[str] = None
     timeout_sec: float = 20.0
     session_id: Optional[str] = None
     message_id: Optional[str] = None

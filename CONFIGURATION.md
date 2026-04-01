@@ -62,6 +62,39 @@
 }
 ```
 
+生产环境如果使用内部 NUCC TTS，可将 `audio.tts` 改为：
+
+```json
+{
+  "audio": {
+    "tts": {
+      "provider": "nucc_tts",
+      "model": "qwen3-tts",
+      "default_voice": "Uncle_Fu",
+      "default_format": "wav",
+      "default_sample_rate": 24000,
+      "request_timeout": 20,
+      "providers": {
+        "nucc_tts": {
+          "endpoint": "https://ai-llm.nucc.com/v1",
+          "api_key": "YOUR_API_KEY",
+          "model": "qwen3-tts",
+          "default_voice": "Uncle_Fu",
+          "task_type": "VoiceDesign",
+          "language": "Chinese",
+          "instructions": "用播音员播报的语气"
+        }
+      }
+    }
+  }
+}
+```
+
+`/v1/audio/speech` 也支持直接透传以下可选字段：
+- `task_type`
+- `language`
+- `instructions`
+
 ## 环境选择
 
 程序会根据配置文件中的 `current_env` 字段或环境变量来决定使用哪套配置。
