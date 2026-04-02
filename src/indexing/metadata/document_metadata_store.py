@@ -7,7 +7,7 @@ import json
 import os
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict, field
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class DocumentRecord:
     regulation_group_name: str = ""  # 同一制度分组名称
     version_label: str = ""  # 版本标签（如：2018版）
     storage_file_id: str = ""  # 统一文件存储ID
+    knowledge_labels: Dict[str, List[str]] = field(default_factory=dict)  # 通用知识分类标签
     
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -40,6 +41,24 @@ class DocumentRecord:
     def from_dict(cls, data: Dict) -> 'DocumentRecord':
         allowed_fields = set(cls.__dataclass_fields__.keys())
         normalized = {k: v for k, v in (data or {}).items() if k in allowed_fields}
+        raw_labels = normalized.get("knowledge_labels")
+        if isinstance(raw_labels, dict):
+            cleaned: Dict[str, List[str]] = {}
+            for key, value in raw_labels.items():
+                normalized_key = str(key or "").strip()
+                if not normalized_key:
+                    continue
+                if isinstance(value, list):
+                    items = [str(v).strip() for v in value if str(v).strip()]
+                elif value is None:
+                    items = []
+                else:
+                    item = str(value).strip()
+                    items = [item] if item else []
+                cleaned[normalized_key] = items
+            normalized["knowledge_labels"] = cleaned
+        elif raw_labels is not None:
+            normalized["knowledge_labels"] = {}
         return cls(**normalized)
 
 
@@ -49,6 +68,8 @@ class DocumentMetadataStore:
     def __init__(self, storage_path: str = "./data/document_metadata.json"):
         self.storage_path = storage_path
         self.documents: Dict[str, DocumentRecord] = {}
+        self._last_loaded_mtime_ns: Optional[int] = None
+        self._last_loaded_size: Optional[int] = None
         self._ensure_dir()
         self._load()
     
@@ -60,16 +81,59 @@ class DocumentMetadataStore:
     
     def _load(self):
         """从文件加载元数据"""
-        if os.path.exists(self.storage_path):
-            try:
-                with open(self.storage_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for doc_id, record in data.items():
-                        self.documents[doc_id] = DocumentRecord.from_dict(record)
-                logger.info(f"已加载 {len(self.documents)} 条文档元数据")
-            except Exception as e:
-                logger.error(f"加载元数据失败: {e}")
+        if not os.path.exists(self.storage_path):
+            self.documents = {}
+            self._last_loaded_mtime_ns = None
+            self._last_loaded_size = None
+            return
+
+        try:
+            stat = os.stat(self.storage_path)
+            with open(self.storage_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            loaded_documents: Dict[str, DocumentRecord] = {}
+            for doc_id, record in data.items():
+                loaded_documents[doc_id] = DocumentRecord.from_dict(record)
+            self.documents = loaded_documents
+            self._last_loaded_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+            self._last_loaded_size = int(stat.st_size)
+            logger.info(f"已加载 {len(self.documents)} 条文档元数据")
+        except Exception as e:
+            logger.error(f"加载元数据失败: {e}")
+            self.documents = {}
+            self._last_loaded_mtime_ns = None
+            self._last_loaded_size = None
+
+    def refresh_if_changed(self) -> bool:
+        """
+        当元数据文件发生变化时，从磁盘轻量重载。
+        :return: True 表示执行了重载
+        """
+        if not os.path.exists(self.storage_path):
+            if self.documents:
                 self.documents = {}
+                self._last_loaded_mtime_ns = None
+                self._last_loaded_size = None
+                logger.info("元数据文件已删除，清空内存缓存: %s", self.storage_path)
+                return True
+            return False
+
+        try:
+            stat = os.stat(self.storage_path)
+        except OSError as e:
+            logger.warning("读取元数据文件状态失败: %s", e)
+            return False
+
+        current_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+        current_size = int(stat.st_size)
+        if (
+            self._last_loaded_mtime_ns == current_mtime_ns
+            and self._last_loaded_size == current_size
+        ):
+            return False
+
+        self._load()
+        return True
     
     def save(self):
         """保存元数据到文件"""
@@ -77,6 +141,13 @@ class DocumentMetadataStore:
             data = {k: v.to_dict() for k, v in self.documents.items()}
             with open(self.storage_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            try:
+                stat = os.stat(self.storage_path)
+                self._last_loaded_mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+                self._last_loaded_size = int(stat.st_size)
+            except OSError:
+                self._last_loaded_mtime_ns = None
+                self._last_loaded_size = None
         except Exception as e:
             logger.error(f"保存元数据失败: {e}")
     
@@ -96,6 +167,7 @@ class DocumentMetadataStore:
             existing.searchable = bool(record.searchable)
             existing.file_path = record.file_path
             existing.filename = record.filename
+            existing.knowledge_labels = dict(record.knowledge_labels or {})
             if record.storage_file_id:
                 existing.storage_file_id = record.storage_file_id
             if save:

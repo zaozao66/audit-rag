@@ -150,6 +150,23 @@ body {
   gap: 10px;
 }
 
+.catalog-main-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #1f2937;
+}
+
+.catalog-title-text {
+  color: inherit;
+}
+
+.catalog-inline-preview {
+  color: #8c8c8c;
+}
+
 .catalog-line-no {
   min-width: 64px;
   text-align: right;

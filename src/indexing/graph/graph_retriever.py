@@ -27,6 +27,7 @@ class GraphRetriever:
         query: str,
         top_k: int = 8,
         doc_types: Optional[List[str]] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
         hops: int = 2,
         max_seed_nodes: int = 24,
     ) -> List[SearchResult]:
@@ -34,7 +35,10 @@ class GraphRetriever:
         if not seeds:
             return []
 
-        allow_chunks = self.graph_store.iter_chunk_nodes(doc_types=doc_types)
+        allow_chunks = self.graph_store.iter_chunk_nodes(
+            doc_types=doc_types,
+            knowledge_filters=knowledge_filters,
+        )
         chunk_scores = defaultdict(float)
 
         for seed in seeds:

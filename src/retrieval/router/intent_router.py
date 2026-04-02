@@ -77,10 +77,13 @@ class IntentRouter:
         retrieval_plan = self._default_retrieval_plan_by_intent(intent)
         retrieval_plan.update(self.default_retrieval_plan)
         retrieval_plan.update(self._parse_retrieval_plan_from_llm(intent_info))
+        knowledge_filters = {}
 
         if retrieval_overrides:
             # API 显式参数优先级最高
             retrieval_plan.update({k: v for k, v in retrieval_overrides.items() if v is not None})
+            if isinstance(retrieval_overrides.get("knowledge_filters"), dict):
+                knowledge_filters = dict(retrieval_overrides.get("knowledge_filters") or {})
 
         retrieval_plan = self._sanitize_retrieval_plan(retrieval_plan)
 
@@ -100,6 +103,7 @@ class IntentRouter:
             "reason": intent_info.get('reason', ''),
             "top_k": current_top_k,
             "doc_types": current_doc_types,
+            "knowledge_filters": knowledge_filters,
             "use_rerank": current_use_rerank,
             "rerank_top_k": safe_rerank_top_k,
             "use_graph": retrieval_plan["use_graph"],

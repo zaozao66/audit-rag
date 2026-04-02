@@ -3,7 +3,6 @@ import {
   Alert,
   Button,
   Card,
-  Checkbox,
   Col,
   Empty,
   Input,
@@ -16,7 +15,6 @@ import {
   Tag,
   Typography
 } from 'antd';
-import type { CheckboxChangeEvent } from 'antd/es/checkbox';
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -26,17 +24,22 @@ import {
   getDocumentDetail,
   listRegulationGroupVersions
 } from '../api/rag';
-import type { DocumentChunkItem, DocumentChunksData, DocumentRecord } from '../types/rag';
+import type { ClassificationField, DocumentChunkItem, DocumentChunksData, DocumentRecord } from '../types/rag';
 
 interface DocumentsPanelProps {
   scope: 'audit' | 'discipline';
   documents: DocumentRecord[];
   docTypeOptions: string[];
+  classificationFields: ClassificationField[];
   loading: boolean;
   docType: string;
   keyword: string;
-  includeDeleted: boolean;
-  onFilterChange: (next: { docType: string; keyword: string; includeDeleted: boolean }) => void;
+  knowledgeFilters: Record<string, string[]>;
+  onFilterChange: (next: {
+    docType: string;
+    keyword: string;
+    knowledgeFilters: Record<string, string[]>;
+  }) => void;
   onRefresh: () => void;
   onDataChanged?: () => void;
 }
@@ -45,10 +48,11 @@ export function DocumentsPanel({
   scope,
   documents,
   docTypeOptions,
+  classificationFields,
   loading,
   docType,
   keyword,
-  includeDeleted,
+  knowledgeFilters,
   onFilterChange,
   onRefresh,
   onDataChanged
@@ -127,7 +131,7 @@ export function DocumentsPanel({
     setHistoryLoading(true);
     setError('');
     try {
-      const result = await listRegulationGroupVersions(selected.regulation_group_id, includeDeleted);
+      const result = await listRegulationGroupVersions(selected.regulation_group_id, false);
       setHistoryVersions(result.versions || []);
       setHistoryVisible(true);
     } catch (err) {
@@ -169,22 +173,42 @@ export function DocumentsPanel({
           <Select
             value={docType}
             style={{ width: 220 }}
-            onChange={(value: string) => onFilterChange({ docType: value, keyword, includeDeleted })}
+            onChange={(value: string) => onFilterChange({ docType: value, keyword, knowledgeFilters })}
             options={[{ value: '', label: '全部类型' }, ...docTypeOptions.map((type) => ({ value: type, label: type }))]}
           />
+          {classificationFields.map((field) => (
+            <Select
+              key={field.key}
+              mode={field.multiple ? 'multiple' : undefined}
+              allowClear
+              value={field.multiple ? (knowledgeFilters[field.key] || []) : (knowledgeFilters[field.key]?.[0] || undefined)}
+              style={{ minWidth: 220 }}
+              onChange={(value) => {
+                const nextValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
+                onFilterChange({
+                  docType,
+                  keyword,
+                  knowledgeFilters: {
+                    ...knowledgeFilters,
+                    [field.key]: nextValues,
+                  },
+                });
+              }}
+              options={field.options.map((option) => ({ value: option.value, label: option.label }))}
+              placeholder={`${field.label}（默认全部）`}
+            />
+          ))}
           <Input
             value={keyword}
             allowClear
             style={{ width: 260 }}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => onFilterChange({ docType, keyword: e.target.value, includeDeleted })}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => onFilterChange({
+              docType,
+              keyword: e.target.value,
+              knowledgeFilters,
+            })}
             placeholder="文件名关键字"
           />
-          <Checkbox
-            checked={includeDeleted}
-            onChange={(e: CheckboxChangeEvent) => onFilterChange({ docType, keyword, includeDeleted: e.target.checked })}
-          >
-            包含已删除文档
-          </Checkbox>
         </Space>
       </Card>
 
@@ -221,12 +245,21 @@ export function DocumentsPanel({
                         <Space size={8} wrap>
                           <Tag>{doc.doc_type}</Tag>
                           <Typography.Text type="secondary">{doc.chunk_count} chunks</Typography.Text>
-                          <Tag color={doc.status === 'active' ? 'green' : 'default'}>{doc.status}</Tag>
                           <Tag color={doc.searchable ? 'processing' : 'gold'}>
                             {doc.searchable ? '可检索' : '仅预览'}
                           </Tag>
                           {doc.regulation_group_name ? <Tag color="blue">{doc.regulation_group_name}</Tag> : null}
                           {doc.version_label ? <Tag color="purple">{doc.version_label}</Tag> : null}
+                          {classificationFields.flatMap((field) => (
+                            (doc.knowledge_labels?.[field.key] || []).map((value) => {
+                              const option = field.options.find((item) => item.value === value);
+                              return (
+                                <Tag key={`${doc.doc_id}-${field.key}-${value}`} color="cyan">
+                                  {option?.label || value}
+                                </Tag>
+                              );
+                            })
+                          ))}
                         </Space>
                       )}
                     />

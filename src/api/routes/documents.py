@@ -1,4 +1,5 @@
 import io
+import json
 import mimetypes
 import os
 
@@ -34,6 +35,21 @@ def _get_scoped_processor(service: RAGService, json_data=None):
     return service.get_processor(scope=scope)
 
 
+def _parse_json_object_arg(value, field_name):
+    raw = str(value or '').strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} 必须是合法 JSON 对象") from exc
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{field_name} 必须是 JSON 对象")
+    return parsed
+
+
 @documents_bp.route('/documents', methods=['GET'])
 def list_documents():
     try:
@@ -43,8 +59,18 @@ def list_documents():
 
         service: RAGService = current_app.extensions['rag_service']
         rag_processor = _get_scoped_processor(service)
+        knowledge_filters = service.normalize_scope_knowledge_labels(
+            rag_processor.scope,
+            _parse_json_object_arg(request.args.get('knowledge_filters'), 'knowledge_filters'),
+            require_required_fields=False,
+        )
 
-        documents = rag_processor.list_documents(doc_type=doc_type, keyword=keyword, include_deleted=include_deleted)
+        documents = rag_processor.list_documents(
+            doc_type=doc_type,
+            keyword=keyword,
+            include_deleted=include_deleted,
+            knowledge_filters=knowledge_filters,
+        )
         return jsonify({
             "success": True,
             "count": len(documents),
@@ -259,7 +285,8 @@ def get_document_chunks(doc_id):
         rag_processor = _get_scoped_processor(service)
 
         include_text = request.args.get('include_text', 'true').lower() == 'true'
-        result = rag_processor.get_document_chunks(doc_id, include_text=include_text)
+        include_chunks = request.args.get('include_chunks', 'true').lower() == 'true'
+        result = rag_processor.get_document_chunks(doc_id, include_text=include_text, include_chunks=include_chunks)
 
         if "error" in result:
             return jsonify(result), 404

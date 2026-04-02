@@ -1,7 +1,20 @@
-export type ChunkerType = 'smart' | 'regulation' | 'audit_report' | 'audit_issue' | 'default';
+export type ChunkerType = 'smart' | 'regulation' | 'technical_standard' | 'audit_report' | 'audit_issue' | 'default';
 
 export interface ApiError {
   error: string;
+}
+
+export interface ClassificationOption {
+  value: string;
+  label: string;
+}
+
+export interface ClassificationField {
+  key: string;
+  label: string;
+  required?: boolean;
+  multiple?: boolean;
+  options: ClassificationOption[];
 }
 
 export interface UploadResponse {
@@ -55,6 +68,7 @@ export interface CitationItem {
   page_nos: number[];
   header: string;
   section_path: string[];
+  knowledge_labels?: Record<string, string[]>;
 }
 
 export interface SearchWithIntentResponse {
@@ -119,6 +133,7 @@ export interface DocumentStats {
 export interface InfoResponse {
   status: string;
   scope?: string;
+  classification_fields?: ClassificationField[];
   vector_store_status: string;
   vector_count: number;
   dimension: number;
@@ -132,6 +147,7 @@ export type RetrievalMode = 'vector' | 'graph' | 'hybrid';
 
 export interface RetrievalOptions {
   retrievalMode: RetrievalMode;
+  knowledgeFilters?: Record<string, string[]>;
 }
 
 export interface DocumentRecord {
@@ -147,6 +163,7 @@ export interface DocumentRecord {
   searchable: boolean;
   version: number;
   tags: string[];
+  knowledge_labels?: Record<string, string[]>;
   regulation_group_id: string;
   regulation_group_name: string;
   version_label: string;
@@ -238,12 +255,16 @@ export interface DocumentChunkItem {
     header: string;
     section_path: string[];
     semantic_boundary: string;
+    knowledge_labels?: Record<string, string[]>;
   };
 }
 
 export interface DocumentCatalogItem {
   id: string;
   title: string;
+  display_title?: string;
+  preview_text?: string;
+  node_type?: string;
   level: number;
   line_no: number;
   page_no?: number | null;
@@ -275,6 +296,7 @@ export interface DocumentDetailData {
   status: 'active' | 'deleted';
   version: number;
   tags: string[];
+  knowledge_labels?: Record<string, string[]>;
   regulation_group_id: string;
   regulation_group_name: string;
   version_label: string;

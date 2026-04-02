@@ -14,7 +14,15 @@ class VectorRetriever(BaseRetriever):
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
 
-    def search(self, query: str, top_k: int = 5, doc_types: List[str] = None, titles: List[str] = None, **kwargs) -> List[SearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        doc_types: List[str] = None,
+        titles: List[str] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
+        **kwargs,
+    ) -> List[SearchResult]:
         """执行向量搜索"""
         # 1. 获取嵌入向量
         query_embeddings = self.embedding_provider.get_embeddings([query])
@@ -25,7 +33,8 @@ class VectorRetriever(BaseRetriever):
             query_embedding, 
             top_k=top_k, 
             doc_types=doc_types, 
-            titles=titles
+            titles=titles,
+            knowledge_filters=knowledge_filters,
         )
         
         # 3. 转换为标准 SearchResult 对象

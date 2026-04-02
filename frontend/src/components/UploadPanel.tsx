@@ -4,10 +4,11 @@ import type { UploadChangeParam, UploadFile } from 'antd/es/upload/interface';
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { listRegulationGroups, uploadArchive, uploadFiles } from '../api/rag';
-import type { RegulationGroupItem, UploadResponse } from '../types/rag';
+import type { ClassificationField, RegulationGroupItem, UploadResponse } from '../types/rag';
 
 interface UploadPanelProps {
   scope: 'audit' | 'discipline';
+  classificationFields: ClassificationField[];
   onUploaded: () => void;
 }
 
@@ -15,7 +16,19 @@ function scopeLabel(scope: 'audit' | 'discipline') {
   return scope === 'audit' ? '审计' : '纪检';
 }
 
-export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
+function buildKnowledgeLabels(fields: ClassificationField[], values: Record<string, string[]>) {
+  const payload: Record<string, string[]> = {};
+  fields.forEach((field) => {
+    const current = values[field.key] || [];
+    const cleaned = current.map((item) => String(item || '').trim()).filter(Boolean);
+    if (cleaned.length > 0) {
+      payload[field.key] = cleaned;
+    }
+  });
+  return payload;
+}
+
+export function UploadPanel({ scope, classificationFields, onUploaded }: UploadPanelProps) {
   const [uploadMode, setUploadMode] = useState<'files' | 'archive'>('files');
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [archiveList, setArchiveList] = useState<UploadFile[]>([]);
@@ -30,6 +43,7 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
   const [versionLabel, setVersionLabel] = useState('');
   const [regulationGroups, setRegulationGroups] = useState<RegulationGroupItem[]>([]);
   const [groupLoading, setGroupLoading] = useState(false);
+  const [classificationValues, setClassificationValues] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<UploadResponse | null>(null);
   const [error, setError] = useState('');
@@ -60,6 +74,17 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
     void loadGroups();
   }, [scope, enableRegulationGroup, isRegulationDocType]);
 
+  useEffect(() => {
+    setClassificationValues((prev) => {
+      const next: Record<string, string[]> = {};
+      classificationFields.forEach((field) => {
+        const current = prev[field.key] || [];
+        next[field.key] = current.filter(Boolean);
+      });
+      return next;
+    });
+  }, [classificationFields]);
+
   const handleUpload = async () => {
     if (uploadMode === 'files' && files.length === 0) {
       setError('请先选择至少一个文件');
@@ -82,9 +107,18 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
       }
     }
 
+    for (const field of classificationFields) {
+      const current = (classificationValues[field.key] || []).filter(Boolean);
+      if (field.required && current.length === 0) {
+        setError(`请选择${field.label}`);
+        return;
+      }
+    }
+
     setLoading(true);
     setError('');
     try {
+      const knowledgeLabels = buildKnowledgeLabels(classificationFields, classificationValues);
       const regulationGroup = enableRegulationGroup && isRegulationDocType
         ? {
             enabled: true,
@@ -94,8 +128,8 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
           }
         : undefined;
       const data = uploadMode === 'files'
-        ? await uploadFiles({ files, chunkerType, docType, title, searchable, regulationGroup })
-        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title, searchable, regulationGroup });
+        ? await uploadFiles({ files, chunkerType, docType, title, searchable, regulationGroup, knowledgeLabels })
+        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title, searchable, regulationGroup, knowledgeLabels });
       setResult(data);
       onUploaded();
     } catch (err) {
@@ -158,6 +192,7 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
             <Select value={chunkerType} onChange={setChunkerType} options={[
               { value: 'smart', label: 'smart' },
               { value: 'regulation', label: 'regulation' },
+              { value: 'technical_standard', label: 'technical_standard' },
               { value: 'audit_report', label: 'audit_report' },
               { value: 'audit_issue', label: 'audit_issue' },
               { value: 'default', label: 'default' }
@@ -178,6 +213,29 @@ export function UploadPanel({ scope, onUploaded }: UploadPanelProps) {
         <Form.Item label="标题（可选）">
           <Input value={title} onChange={(e: ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)} placeholder="如：2025年度内审报告" />
         </Form.Item>
+
+        {classificationFields.length > 0 ? (
+          <div className="form-grid">
+            {classificationFields.map((field) => (
+              <Form.Item key={field.key} label={field.label} required={field.required}>
+                <Select
+                  mode={field.multiple ? 'multiple' : undefined}
+                  allowClear={!field.required}
+                  value={field.multiple ? (classificationValues[field.key] || []) : (classificationValues[field.key]?.[0] || undefined)}
+                  onChange={(value) => {
+                    const nextValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
+                    setClassificationValues((prev) => ({
+                      ...prev,
+                      [field.key]: nextValues,
+                    }));
+                  }}
+                  options={field.options.map((option) => ({ value: option.value, label: option.label }))}
+                  placeholder={`请选择${field.label}`}
+                />
+              </Form.Item>
+            ))}
+          </div>
+        ) : null}
 
         <Form.Item label="入库模式">
           <Space direction="vertical" style={{ width: '100%' }} size={8}>

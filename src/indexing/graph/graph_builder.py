@@ -52,6 +52,7 @@ class GraphBuilder:
                     "doc_id": doc_id,
                     "doc_type": doc.get("doc_type", ""),
                     "filename": doc.get("filename", ""),
+                    "knowledge_labels": doc.get("knowledge_labels", {}) or {},
                 },
             )
 
@@ -70,6 +71,7 @@ class GraphBuilder:
                     "header": doc.get("header", ""),
                     "section_path": doc.get("section_path", []),
                     "text_preview": text[:120] + ("..." if len(text) > 120 else ""),
+                    "knowledge_labels": doc.get("knowledge_labels", {}) or {},
                 },
             )
 

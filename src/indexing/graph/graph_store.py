@@ -112,7 +112,39 @@ class GraphStore:
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:max_nodes]
 
-    def iter_chunk_nodes(self, doc_types: Optional[List[str]] = None) -> Set[str]:
+    @staticmethod
+    def _matches_knowledge_filters(node_attrs: Dict[str, Any], knowledge_filters: Optional[Dict[str, List[str]]]) -> bool:
+        if not knowledge_filters:
+            return True
+
+        raw_labels = node_attrs.get("knowledge_labels", {}) or {}
+        if not isinstance(raw_labels, dict):
+            return False
+
+        for raw_key, raw_expected in knowledge_filters.items():
+            key = str(raw_key or "").strip()
+            expected = [str(item or "").strip() for item in (raw_expected or []) if str(item or "").strip()]
+            if not key or not expected:
+                continue
+
+            current = raw_labels.get(key, [])
+            if isinstance(current, list):
+                current_values = {str(item or "").strip() for item in current if str(item or "").strip()}
+            elif current is None:
+                current_values = set()
+            else:
+                current_values = {str(current).strip()} if str(current).strip() else set()
+
+            if not current_values.intersection(expected):
+                return False
+
+        return True
+
+    def iter_chunk_nodes(
+        self,
+        doc_types: Optional[List[str]] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
+    ) -> Set[str]:
         allow_doc_types = set(doc_types or [])
         chunk_nodes: Set[str] = set()
         for node_id, node in self.nodes.items():
@@ -122,6 +154,8 @@ class GraphStore:
                 node_doc_type = node.get("attrs", {}).get("doc_type")
                 if node_doc_type not in allow_doc_types:
                     continue
+            if not self._matches_knowledge_filters(node.get("attrs", {}) or {}, knowledge_filters):
+                continue
             chunk_nodes.add(node_id)
         return chunk_nodes
 

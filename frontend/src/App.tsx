@@ -40,7 +40,7 @@ export default function App() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [docType, setDocType] = useState('');
   const [keyword, setKeyword] = useState('');
-  const [includeDeleted, setIncludeDeleted] = useState(false);
+  const [docKnowledgeFilters, setDocKnowledgeFilters] = useState<Record<string, string[]>>({});
   const [loadingMeta, setLoadingMeta] = useState(false);
   const [loadingDocs, setLoadingDocs] = useState(false);
 
@@ -58,18 +58,32 @@ export default function App() {
   const loadDocs = useCallback(async () => {
     setLoadingDocs(true);
     try {
-      const data = await listDocuments({ docType, keyword, includeDeleted });
+      const data = await listDocuments({
+        docType,
+        keyword,
+        knowledgeFilters: docKnowledgeFilters,
+      });
       setDocuments(data.documents);
     } finally {
       setLoadingDocs(false);
     }
-  }, [scope, docType, keyword, includeDeleted]);
+  }, [scope, docKnowledgeFilters, docType, keyword]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('rag.scope', scope);
     }
   }, [scope]);
+
+  useEffect(() => {
+    setDocKnowledgeFilters((prev) => {
+      const next: Record<string, string[]> = {};
+      (info?.classification_fields ?? []).forEach((field) => {
+        next[field.key] = prev[field.key] || [];
+      });
+      return next;
+    });
+  }, [info?.classification_fields, scope]);
 
   useEffect(() => {
     void loadMeta();
@@ -161,13 +175,18 @@ export default function App() {
           <Routes>
             <Route
               path="/chat"
-              element={<SearchPanel key={`search-${scope}`} scope={scope} />}
+              element={<SearchPanel key={`search-${scope}`} scope={scope} classificationFields={info?.classification_fields ?? []} />}
             />
             <Route
               path="/upload"
               element={(
                 <div className="tab-content tab-documents">
-                  <UploadPanel key={`upload-${scope}`} scope={scope} onUploaded={refreshAll} />
+                  <UploadPanel
+                    key={`upload-${scope}`}
+                    scope={scope}
+                    classificationFields={info?.classification_fields ?? []}
+                    onUploaded={refreshAll}
+                  />
                 </div>
               )}
             />
@@ -180,14 +199,15 @@ export default function App() {
                     scope={scope}
                     documents={documents}
                     docTypeOptions={Object.keys(stats?.by_type ?? {})}
+                    classificationFields={info?.classification_fields ?? []}
                     loading={loadingDocs}
                     docType={docType}
                     keyword={keyword}
-                    includeDeleted={includeDeleted}
-                    onFilterChange={({ docType: nextType, keyword: nextKeyword, includeDeleted: nextDeleted }) => {
+                    knowledgeFilters={docKnowledgeFilters}
+                    onFilterChange={({ docType: nextType, keyword: nextKeyword, knowledgeFilters: nextFilters }) => {
                       setDocType(nextType);
                       setKeyword(nextKeyword);
-                      setIncludeDeleted(nextDeleted);
+                      setDocKnowledgeFilters(nextFilters);
                     }}
                     onRefresh={loadDocs}
                     onDataChanged={refreshAll}

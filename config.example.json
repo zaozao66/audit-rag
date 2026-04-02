@@ -118,6 +118,20 @@
       },
       "discipline": {
         "vector_store_path": "./data/discipline/vector_store_text_embedding",
+        "classification_fields": [
+          {
+            "key": "library",
+            "label": "纪检知识库分类",
+            "required": true,
+            "multiple": false,
+            "options": [
+              { "value": "important_speeches", "label": "重要讲话精神" },
+              { "value": "national_laws", "label": "国家法律法规" },
+              { "value": "party_regulations", "label": "常用党内法规" },
+              { "value": "case_library", "label": "典型案例库" }
+            ]
+          }
+        ],
         "features": {
           "intent_router": false
         },
@@ -261,6 +275,20 @@
       },
       "discipline": {
         "vector_store_path": "./data/discipline/vector_store_text_embedding",
+        "classification_fields": [
+          {
+            "key": "library",
+            "label": "纪检知识库分类",
+            "required": true,
+            "multiple": false,
+            "options": [
+              { "value": "important_speeches", "label": "重要讲话精神" },
+              { "value": "national_laws", "label": "国家法律法规" },
+              { "value": "party_regulations", "label": "常用党内法规" },
+              { "value": "case_library", "label": "典型案例库" }
+            ]
+          }
+        ],
         "features": {
           "intent_router": false
         },

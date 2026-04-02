@@ -26,6 +26,8 @@ class DocumentProcessor:
     文档处理器 - 支持多种文档格式（PDF、DOCX、TXT）
     """
     
+    ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE = "enterprise_accounting_standards_compendium"
+
     @staticmethod
     def detect_file_type(file_path: str) -> str:
         """
@@ -37,7 +39,31 @@ class DocumentProcessor:
         return ext.lstrip('.')
     
     @staticmethod
-    def load_document(file_path: str, doc_type: str = 'default') -> str:
+    def detect_ingest_profile(filename: str = "", title: str = "") -> Optional[str]:
+        source = f"{filename} {title}".strip()
+        normalized = re.sub(r"\s+", "", source)
+        if not normalized:
+            return None
+
+        if (
+            "企业会计准则" in normalized
+            and (
+                "应用指南" in normalized
+                or "2006-2018" in normalized
+                or "20062018" in normalized
+            )
+        ):
+            return DocumentProcessor.ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE
+
+        return None
+
+    @staticmethod
+    def load_document(
+        file_path: str,
+        doc_type: str = 'default',
+        source_name: str = "",
+        ingest_profile: Optional[str] = None,
+    ) -> str:
         """
         根据文件类型加载文档内容
         :param file_path: 文件路径
@@ -46,9 +72,14 @@ class DocumentProcessor:
         """
         file_type = DocumentProcessor.detect_file_type(file_path)
         logger.info(f"检测到文件类型: {file_type}，文件路径: {file_path}")
+        effective_profile = ingest_profile or DocumentProcessor.detect_ingest_profile(source_name or file_path, source_name)
         
         if file_type == 'pdf':
-            return DocumentProcessor._load_pdf(file_path, is_audit_issue=(doc_type == 'audit_issue'))
+            return DocumentProcessor._load_pdf(
+                file_path,
+                is_audit_issue=(doc_type == 'audit_issue'),
+                ingest_profile=effective_profile,
+            )
         elif file_type == 'docx':
             return DocumentProcessor._load_docx(file_path)
         elif file_type == 'txt':
@@ -57,7 +88,7 @@ class DocumentProcessor:
             raise ValueError(f"不支持的文件类型: {file_type}")
     
     @staticmethod
-    def _load_pdf(file_path: str, is_audit_issue: bool = False) -> str:
+    def _load_pdf(file_path: str, is_audit_issue: bool = False, ingest_profile: Optional[str] = None) -> str:
         """
         加载PDF文档
         :param file_path: PDF文件路径
@@ -126,6 +157,8 @@ class DocumentProcessor:
                     logger.debug(f"处理PDF第 {page_num + 1} 页")
 
                 if not is_audit_issue:
+                    if ingest_profile == DocumentProcessor.ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE:
+                        normal_mode_pages = DocumentProcessor._strip_leading_toc_pages_for_profile(normal_mode_pages)
                     repeated_header_footer = DocumentProcessor._detect_repeated_header_footer_lines(normal_mode_pages)
                     for page_num, lines in enumerate(normal_mode_pages):
                         page_tag = f"[[PAGE:{page_num + 1}]]"
@@ -142,6 +175,14 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"加载PDF文档失败: {e}")
             raise
+
+    @staticmethod
+    def has_meaningful_text(content: str) -> bool:
+        cleaned = re.sub(r"\[\[PAGE:\d+\]\]", " ", str(content or ""))
+        cleaned = re.sub(r"\s+", "", cleaned)
+        if not cleaned:
+            return False
+        return any(ch.isalnum() for ch in cleaned)
 
     @staticmethod
     def _normalize_pdf_lines(lines: List[str]) -> List[str]:
@@ -176,10 +217,80 @@ class DocumentProcessor:
 
         return bool(
             re.match(r"^第[一二三四五六七八九十百千万零〇\d]+[章节条]", value)
+            or re.match(r"^企业会计准则第[一二三四五六七八九十百千万零〇两\d]+号", value)
+            or re.match(r"^企业会计准则应用指南", value)
             or re.match(r"^[一二三四五六七八九十]+、", value)
             or re.match(r"^[（(][一二三四五六七八九十\d]+[）)]", value)
             or re.match(r"^\d+[.、）)]", value)
         )
+
+    @staticmethod
+    def _looks_like_toc_entry_line(line: str) -> bool:
+        value = str(line or "").strip()
+        if not value:
+            return False
+
+        compact = re.sub(r"\s+", "", value)
+        if re.search(r"[.．…·•]{2,}\d{1,4}$", compact):
+            return True
+        if re.match(r"^(第[一二三四五六七八九十百千万零〇两\d]+[章节条]|企业会计准则第[一二三四五六七八九十百千万零〇两\d]+号)", compact) and re.search(r"\d{1,4}$", compact):
+            return True
+        return False
+
+    @staticmethod
+    def _looks_like_toc_page(lines: List[str]) -> bool:
+        normalized_lines = [str(line or "").strip() for line in (lines or []) if str(line or "").strip()]
+        if not normalized_lines:
+            return False
+
+        first_line = re.sub(r"\s+", "", normalized_lines[0])
+        if first_line in {"目录", "目录:", "目录：", "目录", "目录:", "目录："}:
+            return True
+
+        toc_like_count = sum(1 for line in normalized_lines if DocumentProcessor._looks_like_toc_entry_line(line))
+        structural_count = sum(1 for line in normalized_lines if DocumentProcessor._looks_like_structural_heading(line))
+        return toc_like_count >= 5 or (toc_like_count >= 3 and structural_count >= 6)
+
+    @staticmethod
+    def _strip_leading_toc_pages_for_profile(pages_lines: List[List[str]], max_scan_pages: int = 8) -> List[List[str]]:
+        if not pages_lines:
+            return pages_lines
+
+        skip_count = 0
+        upper_bound = min(len(pages_lines), max_scan_pages)
+        for idx in range(upper_bound):
+            if DocumentProcessor._looks_like_toc_page(pages_lines[idx]):
+                skip_count += 1
+                continue
+            break
+
+        if skip_count > 0:
+            logger.info("企业会计准则专用入库规则生效，跳过前 %s 页目录页", skip_count)
+            return [[] if idx < skip_count else lines for idx, lines in enumerate(pages_lines)]
+        return pages_lines
+
+    @staticmethod
+    def _looks_like_article_reference_lead(line: str) -> bool:
+        value = str(line or "").strip()
+        if not value:
+            return False
+
+        match = re.match(r"^(第[一二三四五六七八九十百千万零〇两\d]+条)", value)
+        if not match:
+            return False
+
+        rest = value[match.end():].strip()
+        if not rest:
+            return False
+
+        if re.match(r"^[、，,；;：:]\s*第[一二三四五六七八九十百千万零〇两\d]+条", rest):
+            return True
+        if re.match(r"^(和|及|与|或者|或)\s*第[一二三四五六七八九十百千万零〇两\d]+条", rest):
+            return True
+        if re.match(r"^(规定的|规定|所称|所列|之一|之二|之三|情形|办理|执行)", rest):
+            return True
+
+        return False
 
     @staticmethod
     def _detect_repeated_header_footer_lines(pages_lines: List[List[str]]) -> Set[str]:
@@ -208,8 +319,12 @@ class DocumentProcessor:
             if DocumentProcessor._looks_like_page_number_line(line):
                 repeated.add(line)
                 continue
-            # 保护章/节/条等目录型标题
+            # 章/节/条等结构标题通常不删除，但如果它们在大量页面边缘反复出现，
+            # 更可能是页眉/页脚中的“当前条款提示”而非正文，应一并清理。
             if DocumentProcessor._looks_like_structural_heading(line):
+                structural_threshold = max(3, int(page_count * 0.6))
+                if hits >= structural_threshold and len(line) <= 18:
+                    repeated.add(line)
                 continue
             repeated.add(line)
 
@@ -222,18 +337,23 @@ class DocumentProcessor:
         if not prev or not curr:
             return False
 
-        # 新段落/新标题通常不合并
-        if DocumentProcessor._looks_like_structural_heading(curr):
-            return False
-        if DocumentProcessor._looks_like_page_number_line(curr):
-            return False
-
         # 句号等终止符结尾，倾向新句新行
         if re.search(r"[。！？!?；;：:]$", prev):
             return False
 
         # 如果上一行明显是标题，避免把正文拼到标题行
         if DocumentProcessor._looks_like_structural_heading(prev):
+            return False
+
+        if DocumentProcessor._looks_like_page_number_line(curr):
+            return False
+
+        # 行首“第X条”如果明显是正文中的条文引用，优先并回上一行。
+        if DocumentProcessor._looks_like_article_reference_lead(curr):
+            return True
+
+        # 新段落/新标题通常不合并
+        if DocumentProcessor._looks_like_structural_heading(curr):
             return False
 
         # 其余情况默认合并，可显著减少“同一句被拆成两行”
@@ -343,9 +463,22 @@ def process_uploaded_documents(
                 filename = original_filenames[idx]
             else:
                 filename = os.path.basename(file_path)
+
+            resolved_title = title or filename
+            ingest_profile = DocumentProcessor.detect_ingest_profile(filename, resolved_title)
             
             # 加载文档内容
-            content = DocumentProcessor.load_document(file_path, doc_type=doc_type)
+            content = DocumentProcessor.load_document(
+                file_path,
+                doc_type=doc_type,
+                source_name=filename,
+                ingest_profile=ingest_profile,
+            )
+            if not DocumentProcessor.has_meaningful_text(content):
+                file_type = DocumentProcessor.detect_file_type(filename)
+                if file_type == 'pdf':
+                    raise ValueError("未从PDF中提取到可用文本，可能是扫描版/图片版PDF，请先OCR后再上传")
+                raise ValueError("文档未提取到可用文本内容")
             
             # 创建文档对象
             doc_obj = {
@@ -354,10 +487,12 @@ def process_uploaded_documents(
                 'file_path': file_path,
                 'file_type': DocumentProcessor.detect_file_type(filename), # 使用文件名检测类型更准确
                 'doc_type': doc_type,
-                'title': title or filename,
+                'title': resolved_title,
                 'text': content,
                 'char_count': len(content)
             }
+            if ingest_profile:
+                doc_obj['ingest_profile'] = ingest_profile
 
             if extra_metadata:
                 doc_obj.update({k: v for k, v in extra_metadata.items() if v is not None})

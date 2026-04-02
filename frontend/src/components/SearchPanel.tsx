@@ -1,5 +1,5 @@
 import { MessageOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, SendOutlined, SoundOutlined, StopOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Empty, Input, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Input, Select, Space, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { buildSpeechScript, synthesizeSpeech } from '../api/audio';
@@ -7,7 +7,7 @@ import { resolveApiUrl } from '../api/client';
 import { streamAskWithLlm } from '../api/rag';
 import { useSpeechPlayer } from '../hooks/useSpeechPlayer';
 import type { MessageSpeechState, SpeechPlayState } from '../types/audio';
-import type { CitationItem, StreamProgressEvent } from '../types/rag';
+import type { CitationItem, ClassificationField, StreamProgressEvent } from '../types/rag';
 import { renderMarkdownToHtml } from '../utils/markdown';
 
 const { TextArea } = Input;
@@ -39,6 +39,7 @@ interface ActiveCitationState {
 
 interface SearchPanelProps {
   scope: 'audit' | 'discipline';
+  classificationFields: ClassificationField[];
 }
 
 function scopeLabel(scope: 'audit' | 'discipline') {
@@ -54,12 +55,24 @@ function speechStateLabel(state: SpeechPlayState) {
   return '未播报';
 }
 
-export function SearchPanel({ scope }: SearchPanelProps) {
+function buildKnowledgeFilters(fields: ClassificationField[], values: Record<string, string[]>) {
+  const payload: Record<string, string[]> = {};
+  fields.forEach((field) => {
+    const current = (values[field.key] || []).map((item) => String(item || '').trim()).filter(Boolean);
+    if (current.length > 0) {
+      payload[field.key] = current;
+    }
+  });
+  return payload;
+}
+
+export function SearchPanel({ scope, classificationFields }: SearchPanelProps) {
   const [sessionId, setSessionId] = useState(() => createSessionId());
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [progressText, setProgressText] = useState('等待提问');
+  const [classificationValues, setClassificationValues] = useState<Record<string, string[]>>({});
   const [activeCitation, setActiveCitation] = useState<ActiveCitationState | null>(null);
   const [speechStates, setSpeechStates] = useState<Record<string, MessageSpeechState>>({});
   const [chatItems, setChatItems] = useState<ChatItem[]>([
@@ -103,6 +116,16 @@ export function SearchPanel({ scope }: SearchPanelProps) {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [chatItems, loading]);
+
+  useEffect(() => {
+    setClassificationValues((prev) => {
+      const next: Record<string, string[]> = {};
+      classificationFields.forEach((field) => {
+        next[field.key] = prev[field.key] || [];
+      });
+      return next;
+    });
+  }, [classificationFields]);
 
   const apiMessages = useMemo(
     () =>
@@ -185,10 +208,12 @@ export function SearchPanel({ scope }: SearchPanelProps) {
     setChatItems((prev) => [...prev, nextUserItem, nextAssistantItem]);
 
     try {
+      const knowledgeFilters = buildKnowledgeFilters(classificationFields, classificationValues);
       await streamAskWithLlm(
         payloadMessages,
         {
-          retrievalMode: 'vector'
+          retrievalMode: 'vector',
+          knowledgeFilters,
         },
         sessionId,
         (chunk) => {
@@ -319,6 +344,29 @@ export function SearchPanel({ scope }: SearchPanelProps) {
       <Space direction="vertical" style={{ width: '100%' }} size={8}>
         <Typography.Text type="secondary">{progressText}</Typography.Text>
         <Typography.Text type="secondary">知识域: <Typography.Text code>{scopeLabel(scope)}</Typography.Text></Typography.Text>
+        {classificationFields.length > 0 ? (
+          <Space wrap size={[12, 8]}>
+            <Typography.Text type="secondary">检索范围</Typography.Text>
+            {classificationFields.map((field) => (
+              <Select
+                key={field.key}
+                mode={field.multiple ? 'multiple' : undefined}
+                allowClear
+                style={{ minWidth: 220 }}
+                value={field.multiple ? (classificationValues[field.key] || []) : (classificationValues[field.key]?.[0] || undefined)}
+                onChange={(value) => {
+                  const nextValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
+                  setClassificationValues((prev) => ({
+                    ...prev,
+                    [field.key]: nextValues,
+                  }));
+                }}
+                options={field.options.map((option) => ({ value: option.value, label: option.label }))}
+                placeholder={`${field.label}（默认全部）`}
+              />
+            ))}
+          </Space>
+        ) : null}
         <Typography.Text type="secondary">会话ID: <Typography.Text code>{sessionId}</Typography.Text></Typography.Text>
         {error ? <Alert type="error" showIcon message={error} /> : null}
       </Space>

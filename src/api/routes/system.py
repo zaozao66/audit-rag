@@ -22,6 +22,7 @@ def get_info():
         service: RAGService = current_app.extensions['rag_service']
         scope = extract_scope_from_request(request)
         rag_processor = service.get_processor(scope=scope)
+        classification_fields = service.get_scope_classification_fields(rag_processor.scope)
 
         try:
             rag_processor.load_vector_store()
@@ -41,6 +42,7 @@ def get_info():
             "dimension": rag_processor.dimension or 1024,
             "chunker_type": rag_processor.chunker_type,
             "scope": rag_processor.scope,
+            "classification_fields": classification_fields,
             "embedding_model": rag_processor.embedding_provider.model_name if hasattr(rag_processor.embedding_provider, 'model_name') else 'unknown',
             "rerank_enabled": rag_processor.rerank_provider is not None,
             "document_stats": doc_stats,

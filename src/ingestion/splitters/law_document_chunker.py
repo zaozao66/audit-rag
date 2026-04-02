@@ -23,34 +23,34 @@ class LawDocumentChunker(DocumentChunker):
         ]
 
         self.chapter_patterns = [
-            r'^第[一二三四五六七八九十\d]+章\s*[^\n]*',  # 第X章
-            r'^第[一二三四五六七八九十\d]+节\s*[^\n]*',  # 第X节
-            r'^第[一二三四五六七八九十\d]+条\s*[^\n]*',  # 第X条
+            r'^第[一二三四五六七八九十百千万零〇两\d]+章\s*[^\n]*',  # 第X章
+            r'^第[一二三四五六七八九十百千万零〇两\d]+节\s*[^\n]*',  # 第X节
+            r'^第[一二三四五六七八九十百千万零〇两\d]+条\s*[^\n]*',  # 第X条
             r'^\d+\.\d+\.\d+\s*[^\n]*',  # 1.2.3 格式
             r'^\d+\.\d+\s*[^\n]*',       # 1.2 格式
             r'^\d+\.\s*[^\n]*',          # 1. 格式
-            r'^[\d一二三四五六七八九十]+、\s*[^\n]*',   # 一、格式
+            r'^[\d一二三四五六七八九十百千万零〇两]+、\s*[^\n]*',   # 一、格式
         ]
         
         # 条款模式
         self.article_patterns = [
-            r'^第[一二三四五六七八九十\d]+条\s*[^\n]*',
-            r'^第[一二三四五六七八九十\d]+条[^\n]*',
+            r'^第[一二三四五六七八九十百千万零〇两\d]+条\s*[^\n]*',
+            r'^第[一二三四五六七八九十百千万零〇两\d]+条[^\n]*',
             r'^\d+\.\d+\.\d+\s*[^\n]*',
             r'^\d+\.\d+\s*[^\n]*',
         ]
         
         # 子条款模式（这些应该跟随主条款，而不是单独成块）
         self.sub_article_patterns = [
-            r'^（[一二三四五六七八九十\d]+）\s*[^\n]*',  # （一）格式
-            r'^\([一二三四五六七八九十\d]+\)\s*[^\n]*',  # (一) 格式
+            r'^（[一二三四五六七八九十百千万零〇两\d]+）\s*[^\n]*',  # （一）格式
+            r'^\([一二三四五六七八九十百千万零〇两\d]+\)\s*[^\n]*',  # (一) 格式
             r'^（[①②③④⑤⑥⑦⑧⑨⑩]+\）\s*[^\n]*',      # （①）格式
             r'^\([①②③④⑤⑥⑦⑧⑨⑩]+\)\s*[^\n]*',       # (①) 格式
         ]
         
         # 组合所有模式
         self.all_patterns = self.preamble_patterns + self.chapter_patterns + self.sub_article_patterns
-        
+        self._page_tag_pattern = re.compile(r"\[\[PAGE:\d+\]\]")
 
     
     def chunk_law_document(self, document: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -63,12 +63,13 @@ class LawDocumentChunker(DocumentChunker):
         filename = document.get('filename', 'unknown')
             
         logger.info(f"开始按法规结构分块文档: {filename}")
+        ingest_profile = str(document.get('ingest_profile', '') or '').strip()
             
         # 按行分割文本，并对PDF抽取常见的重复字伪影做归一化
         lines = [self._normalize_extracted_line(line) for line in text.split('\n')]
             
         # 识别章节结构
-        sections = self._identify_sections(lines)
+        sections = self._identify_sections(lines, ingest_profile=ingest_profile)
             
         # 构建分块
         chunks = []
@@ -136,8 +137,8 @@ class LawDocumentChunker(DocumentChunker):
                 # 如果当前section_path不为空，也从内容中移除章节路径的标题（避免路径信息影响判断）
                 for path_header in chunk_section_path:
                     content_without_header = content_without_header.replace(path_header, '', 1)
-                                                
-                content_without_header = content_without_header.strip()
+                
+                content_without_header = self._strip_page_tags(content_without_header).strip()
                                 
                 # 移除可能的注释（如 # 这个只有标题没有内容）
                 content_without_comments = re.sub(r'#.*$', '', content_without_header, flags=re.MULTILINE).strip()
@@ -154,8 +155,12 @@ class LawDocumentChunker(DocumentChunker):
                 # 对于article类型，如果标题后没有实质内容（如"第七条"后面没有任何内容），也跳过
                 if section_type == 'article':
                     # 检查是否是简单序号标题（如"第X条"）且内容主要是注释
-                    is_simple_numbered_article = re.match(r'^第[一二三四五六七八九十\d]+条', section_header.strip())
+                    is_simple_numbered_article = re.match(r'^第[一二三四五六七八九十百千万零〇两\d]+条', section_header.strip())
                     
+                    if is_simple_numbered_article and meaningful_chars < 5:
+                        logger.debug(f"跳过无实质内容的简单条款: {section_header}")
+                        skip_current_chunk = True
+
                     # 检查内容是否主要是注释
                     is_mainly_comment = '#' in section_header and meaningful_chars < 5
                     
@@ -186,6 +191,7 @@ class LawDocumentChunker(DocumentChunker):
                 chapter_context = self._extract_chapter_context(current_section_path)
                 current_section_path = chapter_context + [section_header] if section_header else chapter_context
             
+        chunks = self._filter_suspicious_article_chunks(chunks)
         logger.info(f"法规文档分块完成，共生成 {len(chunks)} 个文本块")
         return chunks
 
@@ -195,11 +201,38 @@ class LawDocumentChunker(DocumentChunker):
         """
         for header in section_path:
             normalized = str(header or "").strip()
-            if re.match(r'^第[一二三四五六七八九十\d]+章', normalized):
+            if re.match(r'^第[一二三四五六七八九十百千万零〇两\d]+章', normalized):
                 return [normalized]
         return []
     
-    def _identify_sections(self, lines: List[str]) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _looks_like_profile_toc_entry(line: str) -> bool:
+        compact = re.sub(r'\s+', '', str(line or '').strip())
+        if not compact:
+            return False
+        if re.search(r'[.．…·•]{2,}\d{1,4}$', compact):
+            return True
+        if compact.endswith(tuple(str(i) for i in range(10))) and re.match(r'^企业会计准则第[一二三四五六七八九十百千万零〇两\d]+号', compact):
+            return True
+        return False
+
+    @staticmethod
+    def _match_profile_root_heading(line: str, ingest_profile: str) -> tuple:
+        if ingest_profile != 'enterprise_accounting_standards_compendium':
+            return None, ''
+
+        stripped_line = str(line or '').strip()
+        if not stripped_line or LawDocumentChunker._looks_like_profile_toc_entry(stripped_line):
+            return None, ''
+
+        compact = re.sub(r'[\s《》<>]', '', stripped_line)
+        if re.match(r'^企业会计准则第[一二三四五六七八九十百千万零〇两\d]+号', compact):
+            return 'chapter', stripped_line
+        if compact.startswith('企业会计准则应用指南'):
+            return 'chapter', stripped_line
+        return None, ''
+
+    def _identify_sections(self, lines: List[str], ingest_profile: str = '') -> List[Dict[str, Any]]:
         """
         识别文档中的章节结构
         :param lines: 文档行列表
@@ -209,7 +242,7 @@ class LawDocumentChunker(DocumentChunker):
         
         for line in lines:
             # 检查是否是章节标题
-            section_type, header = self._check_section_header(line)
+            section_type, header = self._check_section_header(line, ingest_profile=ingest_profile)
             
             if section_type:
                 if section_type == 'sub_article':
@@ -233,7 +266,7 @@ class LawDocumentChunker(DocumentChunker):
                     sections.append({
                         'type': section_type,
                         'header': header.strip(),
-                        'content': header + '\n'  # 只包含标题行
+                        'content': line + '\n'
                     })
             else:
                 # 添加内容到最新章节
@@ -249,7 +282,7 @@ class LawDocumentChunker(DocumentChunker):
         
         return sections
     
-    def _check_section_header(self, line: str) -> tuple:
+    def _check_section_header(self, line: str, ingest_profile: str = '') -> tuple:
         """
         检查行是否为章节标题
         :param line: 文本行
@@ -260,6 +293,10 @@ class LawDocumentChunker(DocumentChunker):
         # 跳过空行
         if not stripped_line:
             return None, ''
+
+        profile_section_type, profile_header = self._match_profile_root_heading(stripped_line, ingest_profile)
+        if profile_section_type:
+            return profile_section_type, profile_header
         
         # 检查子条款模式（优先检查，因为它们应该跟随父条款）
         for pattern in self.sub_article_patterns:
@@ -280,8 +317,10 @@ class LawDocumentChunker(DocumentChunker):
             match = re.match(pattern, stripped_line)
             if match:
                 header = match.group(0)
+                if self._looks_like_article_reference_heading(stripped_line):
+                    return None, ''
                 if any(re.match(p, header) for p in self.article_patterns):
-                    return 'article', header
+                    return 'article', self._extract_article_heading_token(stripped_line)
                 elif '章' in header:
                     return 'chapter', header
                 elif '节' in header:
@@ -453,3 +492,180 @@ class LawDocumentChunker(DocumentChunker):
             stripped = re.sub(r'([\u4e00-\u9fff])\1+', r'\1', stripped)
 
         return stripped
+
+    def _strip_page_tags(self, text: str) -> str:
+        cleaned = self._page_tag_pattern.sub("", str(text or ""))
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    @staticmethod
+    def _extract_article_heading_token(line: str) -> str:
+        stripped = str(line or "").strip()
+        match = re.match(r'^(第[一二三四五六七八九十百千万零〇两\d]+条)', stripped)
+        if match:
+            return match.group(1)
+        return stripped
+
+    @staticmethod
+    def _looks_like_article_reference_heading(line: str) -> bool:
+        stripped = str(line or "").strip()
+        if not stripped:
+            return False
+
+        match = re.match(r'^(第[一二三四五六七八九十百千万零〇两\d]+条)', stripped)
+        if not match:
+            return False
+
+        rest = stripped[match.end():].strip()
+        if not rest:
+            return False
+
+        if re.match(r'^[、，,；;：:]\s*第[一二三四五六七八九十百千万零〇两\d]+条', rest):
+            return True
+        if re.match(r'^(和|及|与|或者|或)\s*第[一二三四五六七八九十百千万零〇两\d]+条', rest):
+            return True
+
+        return False
+
+    def _extract_chunk_body_text(self, chunk: Dict[str, Any]) -> str:
+        text = str(chunk.get('text', '') or '')
+        header = str(chunk.get('header', '') or '').strip()
+        section_path = [str(item).strip() for item in (chunk.get('section_path', []) or []) if str(item).strip()]
+        cleaned = self._strip_page_tags(text)
+        if header:
+            cleaned = cleaned.replace(header, '', 1).strip()
+        for path_header in section_path:
+            cleaned = cleaned.replace(path_header, '', 1).strip()
+        cleaned = re.sub(r'#.*$', '', cleaned, flags=re.MULTILINE).strip()
+        return cleaned
+
+    @staticmethod
+    def _looks_like_reference_style_body(text: str) -> bool:
+        stripped = str(text or '').strip()
+        if not stripped:
+            return False
+
+        if re.match(r'^[、，,；;：:]\s*第[一二三四五六七八九十百千万零〇两\d]+条', stripped):
+            return True
+        if re.match(r'^(和|及|与|或者|或)\s*第[一二三四五六七八九十百千万零〇两\d]+条', stripped):
+            return True
+        if re.match(r'^(规定的|规定|所称|所列|之一|之二|之三|情形|办理|执行|适用|处理|追究)', stripped):
+            return True
+
+        return False
+
+    @staticmethod
+    def _extract_article_number_from_header(header: str) -> int:
+        token = str(header or "").strip()
+        if not token:
+            return -1
+        match = re.match(r'^第([一二三四五六七八九十百千万零〇两\d]+)条', token)
+        if not match:
+            return -1
+        raw = str(match.group(1) or "").strip()
+        if raw.isdigit():
+            return int(raw)
+
+        digit_map = {
+            "零": 0,
+            "〇": 0,
+            "一": 1,
+            "二": 2,
+            "两": 2,
+            "三": 3,
+            "四": 4,
+            "五": 5,
+            "六": 6,
+            "七": 7,
+            "八": 8,
+            "九": 9,
+        }
+        unit_map = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+
+        if all(ch in digit_map for ch in raw):
+            return int("".join(str(digit_map[ch]) for ch in raw))
+
+        total = 0
+        section = 0
+        number = 0
+        seen = False
+        for ch in raw:
+            if ch in digit_map:
+                number = digit_map[ch]
+                seen = True
+                continue
+            if ch in unit_map:
+                seen = True
+                unit = unit_map[ch]
+                if unit == 10000:
+                    section = (section + number) * unit
+                    total += section
+                    section = 0
+                    number = 0
+                else:
+                    if number == 0:
+                        number = 1
+                    section += number * unit
+                    number = 0
+                continue
+            return -1
+
+        if not seen:
+            return -1
+        return total + section + number
+
+    def _body_meaningful_chars(self, chunk: Dict[str, Any]) -> int:
+        cleaned = self._extract_chunk_body_text(chunk)
+        return sum(1 for c in cleaned if c.isalnum() or c in '，。！？；：、""\'\'（）【】[]《》〈〉「」『』…—')
+
+    def _filter_suspicious_article_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(chunks) < 3:
+            return chunks
+
+        filtered: List[Dict[str, Any]] = []
+        for idx, chunk in enumerate(chunks):
+            if chunk.get('semantic_boundary') != 'article':
+                filtered.append(chunk)
+                continue
+
+            current_number = self._extract_article_number_from_header(chunk.get('header', ''))
+            if current_number < 0:
+                filtered.append(chunk)
+                continue
+
+            prev_number = -1
+            next_number = -1
+            for prev_idx in range(idx - 1, -1, -1):
+                if chunks[prev_idx].get('semantic_boundary') == 'article':
+                    prev_number = self._extract_article_number_from_header(chunks[prev_idx].get('header', ''))
+                    break
+            for next_idx in range(idx + 1, len(chunks)):
+                if chunks[next_idx].get('semantic_boundary') == 'article':
+                    next_number = self._extract_article_number_from_header(chunks[next_idx].get('header', ''))
+                    break
+
+            body_chars = self._body_meaningful_chars(chunk)
+            body_text = self._extract_chunk_body_text(chunk)
+            looks_like_reference_body = self._looks_like_reference_style_body(body_text)
+            is_regression_noise = (
+                prev_number > 0
+                and next_number > 0
+                and current_number < prev_number
+                and next_number == prev_number + 1
+                and (body_chars < 12 or looks_like_reference_body)
+            )
+            if is_regression_noise:
+                logger.warning(
+                    "跳过疑似PDF抽取伪影条款: current=%s prev=%s next=%s header=%s body_chars=%s reference_like=%s",
+                    current_number,
+                    prev_number,
+                    next_number,
+                    chunk.get('header', ''),
+                    body_chars,
+                    looks_like_reference_body,
+                )
+                continue
+
+            filtered.append(chunk)
+
+        return filtered

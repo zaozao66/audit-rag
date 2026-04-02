@@ -29,20 +29,33 @@ echo ""
 
 # 构建前端静态资源（若存在前端工程）
 if [ -d "frontend" ]; then
-    echo "检测到 frontend 工程，开始构建前端..."
-    if ! command -v npm >/dev/null 2>&1; then
-        echo "错误: 未找到 npm，请先安装 Node.js/npm"
-        exit 1
-    fi
+    if [ "${SKIP_FRONTEND_BUILD:-0}" = "1" ]; then
+        echo "检测到 SKIP_FRONTEND_BUILD=1，跳过前端构建"
+        echo ""
+    else
+        echo "检测到 frontend 工程，开始构建前端..."
+        if ! command -v npm >/dev/null 2>&1; then
+            echo "错误: 未找到 npm，请先安装 Node.js/npm"
+            exit 1
+        fi
 
-    cd frontend || exit 1
-    npm run build || {
-        echo "前端构建失败，已中止启动"
-        exit 1
-    }
-    cd .. || exit 1
-    echo "前端构建完成"
-    echo ""
+        cd frontend || exit 1
+        if ! npm run build; then
+            cd .. || exit 1
+            if [ -f "src/api/static/index.html" ]; then
+                echo "警告: 前端构建失败，继续使用现有静态资源启动后端"
+                echo "如需完全跳过前端构建，可使用: SKIP_FRONTEND_BUILD=1 ./start_api.sh"
+                echo ""
+            else
+                echo "前端构建失败，且不存在可复用的静态资源，已中止启动"
+                exit 1
+            fi
+        else
+            cd .. || exit 1
+            echo "前端构建完成"
+            echo ""
+        fi
+    fi
 fi
 
 python3 api_server.py --host 0.0.0.0 --port $PORT

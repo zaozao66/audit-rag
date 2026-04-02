@@ -68,6 +68,22 @@ def _parse_retrieval_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             pass
 
+    if 'knowledge_filters' in data and isinstance(data.get('knowledge_filters'), dict):
+        normalized: Dict[str, List[str]] = {}
+        for raw_key, raw_value in (data.get('knowledge_filters') or {}).items():
+            key = str(raw_key or '').strip()
+            if not key:
+                continue
+            if isinstance(raw_value, list):
+                values = [str(item or '').strip() for item in raw_value if str(item or '').strip()]
+            else:
+                value = str(raw_value or '').strip()
+                values = [value] if value else []
+            if values:
+                normalized[key] = values
+        if normalized:
+            overrides['knowledge_filters'] = normalized
+
     return overrides
 
 
@@ -411,6 +427,12 @@ def search_with_intent():
             return jsonify({"error": "缺少query参数"}), 400
 
         retrieval_overrides = _parse_retrieval_overrides(data)
+        if "knowledge_filters" in retrieval_overrides:
+            retrieval_overrides["knowledge_filters"] = service.normalize_scope_knowledge_labels(
+                rag_processor.scope,
+                retrieval_overrides.get("knowledge_filters"),
+                require_required_fields=False,
+            )
         result = rag_processor.search_with_intent(
             query,
             use_rerank=True,
@@ -446,6 +468,12 @@ def ask_with_llm():
         query = data['query']
         top_k = _parse_top_k(data.get('top_k', 5))
         retrieval_overrides = _parse_retrieval_overrides(data)
+        if "knowledge_filters" in retrieval_overrides:
+            retrieval_overrides["knowledge_filters"] = service.normalize_scope_knowledge_labels(
+                rag_processor.scope,
+                retrieval_overrides.get("knowledge_filters"),
+                require_required_fields=False,
+            )
         result = rag_processor.search_with_llm_answer(
             query,
             top_k=top_k,
@@ -499,6 +527,12 @@ def chat_completions():
         top_k = _parse_top_k(data.get('top_k', 5))
         session_id = data.get('session_id')
         retrieval_overrides = _parse_retrieval_overrides(data)
+        if "knowledge_filters" in retrieval_overrides:
+            retrieval_overrides["knowledge_filters"] = service.normalize_scope_knowledge_labels(
+                resolved_scope,
+                retrieval_overrides.get("knowledge_filters"),
+                require_required_fields=False,
+            )
 
         current_app.logger.info(
             "OpenAI兼容接口收到请求: scope=%s query='%s...', stream=%s, top_k=%s, retrieval_mode=%s, session_id=%s",

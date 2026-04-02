@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import tempfile
 from typing import Any, Dict, List
 
@@ -15,6 +17,7 @@ from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
 from src.ingestion.splitters.document_chunker import DocumentChunker
 from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
+from src.ingestion.splitters.technical_standard_chunker import TechnicalStandardChunker
 from src.ingestion.splitters.smart_chunker import SmartChunker
 
 
@@ -40,10 +43,26 @@ def _to_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _parse_json_object_field(raw_value: Any, field_name: str) -> Dict[str, Any]:
+    if raw_value in (None, ""):
+        return {}
+    if isinstance(raw_value, dict):
+        return dict(raw_value)
+    try:
+        parsed = json.loads(str(raw_value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError(f"{field_name} 必须是合法的 JSON 对象")
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{field_name} 必须是 JSON 对象")
+    return parsed
+
+
 def _normalize_chunker_type(value: str) -> str:
     chunker_type = value or 'smart'
     if chunker_type == 'law':
         return 'regulation'
+    if chunker_type in {'technical', 'tech_standard', 'standard'}:
+        return 'technical_standard'
     if chunker_type == 'audit':
         return 'audit_report'
     if chunker_type == 'issue':
@@ -87,6 +106,49 @@ def _infer_catalog_level(semantic_boundary: str, header: str, section_path: List
     return max(1, min(6, len(section_path) + 1))
 
 
+def _infer_catalog_node_type(semantic_boundary: str, header: str) -> str:
+    boundary = str(semantic_boundary or '').strip().lower()
+    normalized_header = str(header or '').strip()
+
+    if boundary in {'chapter', 'section', 'article', 'content'}:
+        return boundary
+    if normalized_header.startswith('第') and '章' in normalized_header:
+        return 'chapter'
+    if normalized_header.startswith('第') and '节' in normalized_header:
+        return 'section'
+    if normalized_header.startswith('第') and '条' in normalized_header:
+        return 'article'
+    return 'content'
+
+
+def _build_catalog_display_title(node_type: str, title: str) -> str:
+    normalized_title = str(title or '').strip()
+    if not normalized_title:
+        return ''
+    if node_type == 'article':
+        match = re.search(r'(第[一二三四五六七八九十百千万零〇两\d]+条)', normalized_title)
+        if match:
+            return match.group(1).strip()
+    return normalized_title
+
+
+def _build_catalog_preview_text(text: str, section_path: List[str], title: str, display_title: str, node_type: str) -> str:
+    if node_type != 'article':
+        return ''
+
+    cleaned = re.sub(r'\[\[PAGE:\d+\]\]', ' ', str(text or ''))
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    if not cleaned:
+        return ''
+
+    for prefix in [*section_path, title, display_title]:
+        normalized_prefix = str(prefix or '').strip()
+        if normalized_prefix and cleaned.startswith(normalized_prefix):
+            cleaned = cleaned[len(normalized_prefix):].lstrip('：:，,。；;、-— \t')
+
+    return cleaned[:120].strip()
+
+
 def _format_chunks_with_catalog(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
     formatted_chunks: List[Dict[str, Any]] = []
     catalog: List[Dict[str, Any]] = []
@@ -112,6 +174,9 @@ def _format_chunks_with_catalog(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
             catalog_key = tuple(catalog_path) if catalog_path else (header,)
             if catalog_key not in seen_catalog_keys:
                 seen_catalog_keys.add(catalog_key)
+                node_type = _infer_catalog_node_type(chunk.get('semantic_boundary', ''), header)
+                display_title = _build_catalog_display_title(node_type, header)
+                preview_text = _build_catalog_preview_text(text, catalog_path, header, display_title, node_type)
                 anchor_line = line_start
                 for offset, line in enumerate(lines):
                     normalized_line = line.strip()
@@ -122,6 +187,9 @@ def _format_chunks_with_catalog(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
                 catalog.append({
                     'id': f'catalog_{len(catalog) + 1}',
                     'title': header,
+                    'display_title': display_title,
+                    'preview_text': preview_text,
+                    'node_type': node_type,
                     'level': _infer_catalog_level(chunk.get('semantic_boundary', ''), header, section_path),
                     'line_no': anchor_line,
                     'chunk_id': i + 1,
@@ -156,21 +224,13 @@ def store_documents():
 
         if is_json_request:
             data = request.get_json()
-            chunker_type = data.get('chunker_type') or data.get('chunker-type') or 'smart'
-            if chunker_type == 'law':
-                chunker_type = 'regulation'
-            if chunker_type == 'audit':
-                chunker_type = 'audit_report'
-            if chunker_type == 'issue':
-                chunker_type = 'audit_issue'
+            chunker_type = _normalize_chunker_type(
+                data.get('chunker_type') or data.get('chunker-type') or 'smart'
+            )
         elif request.form:
-            chunker_type = request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
-            if chunker_type == 'law':
-                chunker_type = 'regulation'
-            if chunker_type == 'audit':
-                chunker_type = 'audit_report'
-            if chunker_type == 'issue':
-                chunker_type = 'audit_issue'
+            chunker_type = _normalize_chunker_type(
+                request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
+            )
 
         if not is_json_request:
             return jsonify({"error": "请求必须是JSON格式"}), 400
@@ -457,6 +517,11 @@ def upload_and_store_documents():
         save_after_processing = request.form.get('save_after_processing', 'true').lower() == 'true'
         searchable = _to_bool(request.form.get('searchable', 'true'), default=True)
         _ensure_no_custom_store_path(request.form.get('store_path'))
+        knowledge_labels = service.normalize_scope_knowledge_labels(
+            rag_processor.scope,
+            _parse_json_object_field(request.form.get('knowledge_labels'), 'knowledge_labels'),
+            require_required_fields=True,
+        )
 
         temp_file_paths: List[str] = []
         file_id_by_temp_path: Dict[str, str] = {}
@@ -493,6 +558,7 @@ def upload_and_store_documents():
                 "regulation_group_id": regulation_group_id,
                 "regulation_group_name": regulation_group_name,
                 "version_label": version_label,
+                "knowledge_labels": knowledge_labels,
             }
 
             documents = process_uploaded_documents(
@@ -579,6 +645,11 @@ def upload_archive_and_store_documents():
         save_after_processing = _to_bool(request.form.get('save_after_processing', 'true'), default=True)
         searchable = _to_bool(request.form.get('searchable', 'true'), default=True)
         _ensure_no_custom_store_path(request.form.get('store_path'))
+        knowledge_labels = service.normalize_scope_knowledge_labels(
+            rag_processor.scope,
+            _parse_json_object_field(request.form.get('knowledge_labels'), 'knowledge_labels'),
+            require_required_fields=True,
+        )
 
         doc_type = request.form.get('doc_type', 'internal_regulation')
         enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
@@ -594,6 +665,7 @@ def upload_archive_and_store_documents():
             "regulation_group_id": regulation_group_id,
             "regulation_group_name": regulation_group_name,
             "version_label": version_label,
+            "knowledge_labels": knowledge_labels,
         }
 
         temp_archive = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
@@ -710,15 +782,12 @@ def test_chunking():
         chunker_type = data.get('chunker_type') or data.get('chunker-type') or 'smart'
         doc_type = data.get('doc_type')
 
-        if chunker_type == 'law':
-            chunker_type = 'regulation'
-        if chunker_type == 'audit':
-            chunker_type = 'audit_report'
-        if chunker_type == 'issue':
-            chunker_type = 'audit_issue'
+        chunker_type = _normalize_chunker_type(chunker_type)
 
         if not doc_type:
             if chunker_type == 'regulation':
+                doc_type = 'internal_regulation'
+            elif chunker_type == 'technical_standard':
                 doc_type = 'internal_regulation'
             elif chunker_type == 'audit_report':
                 doc_type = 'internal_report'
@@ -741,6 +810,8 @@ def test_chunking():
 
         if chunker_type in ('regulation', 'law'):
             chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == 'technical_standard':
+            chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type in ('audit_report', 'audit'):
             chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type in ('audit_issue', 'issue'):
@@ -782,15 +853,12 @@ def test_chunking_upload():
         chunker_type = request.form.get('chunker_type') or request.form.get('chunker-type') or 'smart'
         doc_type = request.form.get('doc_type')
 
-        if chunker_type == 'law':
-            chunker_type = 'regulation'
-        if chunker_type == 'audit':
-            chunker_type = 'audit_report'
-        if chunker_type == 'issue':
-            chunker_type = 'audit_issue'
+        chunker_type = _normalize_chunker_type(chunker_type)
 
         if not doc_type:
             if chunker_type == 'regulation':
+                doc_type = 'internal_regulation'
+            elif chunker_type == 'technical_standard':
                 doc_type = 'internal_regulation'
             elif chunker_type == 'audit_report':
                 doc_type = 'internal_report'
@@ -825,6 +893,8 @@ def test_chunking_upload():
 
             if chunker_type in ('regulation', 'law'):
                 chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
+            elif chunker_type == 'technical_standard':
+                chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
             elif chunker_type in ('audit_report', 'audit'):
                 chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
             elif chunker_type in ('audit_issue', 'issue'):

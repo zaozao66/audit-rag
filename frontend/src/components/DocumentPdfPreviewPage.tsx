@@ -9,6 +9,8 @@ import type { DocumentChunksData } from '../types/rag';
 
 const { Header, Content } = Layout;
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+const PDF_LAZY_RENDER_THRESHOLD = 60;
+const PDF_LAZY_RENDER_WINDOW = 2;
 
 interface PdfLineInfo {
   text: string;
@@ -16,10 +18,28 @@ interface PdfLineInfo {
   top: number;
 }
 
+interface PdfPageMetric {
+  width: number;
+  height: number;
+}
+
 interface PdfCanvasPageProps {
   pdfDoc: any;
   pageNumber: number;
   onLinesReady: (pageNumber: number, lines: PdfLineInfo[]) => void;
+}
+
+interface LazyPdfPageShellProps {
+  pdfDoc: any;
+  pageNumber: number;
+  container: HTMLDivElement | null;
+  active: boolean;
+  shouldRender: boolean;
+  estimatedMetric: PdfPageMetric | null;
+  onLinesReady: (pageNumber: number, lines: PdfLineInfo[]) => void;
+  onRequireRender: (pageNumber: number) => void;
+  registerPageRef: (pageNumber: number, el: HTMLDivElement | null) => void;
+  highlightTarget: { pageNo: number; top: number; title: string } | null;
 }
 
 function normalizeForMatch(input: string) {
@@ -31,6 +51,14 @@ function normalizeForMatch(input: string) {
 function extractStructuredAnchor(normalizedTitle: string): string {
   const matched = normalizedTitle.match(/^第[一二三四五六七八九十百千万零〇\d]+[章节条款]/);
   return matched ? matched[0] : '';
+}
+
+function getCatalogDisplayTitle(title: string, displayTitle?: string) {
+  return String(displayTitle || title || '').trim();
+}
+
+function getCatalogInlinePreview(previewText?: string) {
+  return String(previewText || '').replace(/\s+/g, ' ').trim();
 }
 
 function findBestLineTop(lines: PdfLineInfo[], title: string) {
@@ -61,6 +89,86 @@ function findBestLineTop(lines: PdfLineInfo[], title: string) {
 const wait = (ms: number) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
 });
+
+function LazyPdfPageShell({
+  pdfDoc,
+  pageNumber,
+  container,
+  active,
+  shouldRender,
+  estimatedMetric,
+  onLinesReady,
+  onRequireRender,
+  registerPageRef,
+  highlightTarget,
+}: LazyPdfPageShellProps) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = shellRef.current;
+    if (!node) return undefined;
+    registerPageRef(pageNumber, node);
+    return () => {
+      registerPageRef(pageNumber, null);
+    };
+  }, [pageNumber, registerPageRef]);
+
+  useEffect(() => {
+    if (shouldRender) return undefined;
+    const node = shellRef.current;
+    if (!node) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0)) {
+          onRequireRender(pageNumber);
+        }
+      },
+      {
+        root: container,
+        rootMargin: '1200px 0px',
+      }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [container, onRequireRender, pageNumber, shouldRender]);
+
+  const placeholderHeight = Math.max(estimatedMetric?.height ?? 960, 640);
+  const placeholderWidth = Math.max(estimatedMetric?.width ?? 720, 480);
+
+  return (
+    <div
+      ref={shellRef}
+      className={`pdf-page-shell ${active ? 'active' : ''}`}
+    >
+      {highlightTarget && highlightTarget.pageNo === pageNumber ? (
+        <div
+          className="pdf-line-highlight"
+          style={{ top: `${highlightTarget.top}px` }}
+          title={highlightTarget.title}
+        >
+          <span className="pdf-line-highlight-badge">定位行</span>
+        </div>
+      ) : null}
+      {shouldRender ? (
+        <PdfCanvasPage pdfDoc={pdfDoc} pageNumber={pageNumber} onLinesReady={onLinesReady} />
+      ) : (
+        <div className="pdf-page-canvas-wrap">
+          <Typography.Text type="secondary" className="pdf-page-label">第 {pageNumber} 页</Typography.Text>
+          <div
+            className="pdf-page-canvas"
+            style={{
+              width: `${placeholderWidth}px`,
+              height: `${placeholderHeight}px`,
+              background: '#fff',
+              border: '1px solid #eef1f5',
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PdfCanvasPage({ pdfDoc, pageNumber, onLinesReady }: PdfCanvasPageProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -212,6 +320,9 @@ export function DocumentPdfPreviewPage() {
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState('');
+  const [estimatedPageMetric, setEstimatedPageMetric] = useState<PdfPageMetric | null>(null);
+  const [renderedPages, setRenderedPages] = useState<Record<number, boolean>>({});
+  const [useLazyRender, setUseLazyRender] = useState(false);
   const [activeCatalogId, setActiveCatalogId] = useState('');
   const [activePage, setActivePage] = useState<number | null>(null);
   const [highlightTarget, setHighlightTarget] = useState<{ pageNo: number; top: number; title: string } | null>(null);
@@ -243,10 +354,10 @@ export function DocumentPdfPreviewPage() {
           }
         }
 
-        let result = await getDocumentChunks(targetDocId, false);
+        let result = await getDocumentChunks(targetDocId, false, false);
         if ((result.data?.catalog ?? []).length === 0) {
           await wait(220);
-          result = await getDocumentChunks(targetDocId, false);
+          result = await getDocumentChunks(targetDocId, false, false);
         }
         if (!cancelled) {
           setResolvedDocId(targetDocId);
@@ -280,6 +391,23 @@ export function DocumentPdfPreviewPage() {
     }
     pendingJumpRef.current = null;
   }, [data]);
+
+  const markPageWindowRendered = useCallback((centerPage: number) => {
+    if (!centerPage || centerPage < 1) return;
+    setRenderedPages((prev) => {
+      const next = { ...prev };
+      for (let pageNo = Math.max(1, centerPage - PDF_LAZY_RENDER_WINDOW); pageNo <= centerPage + PDF_LAZY_RENDER_WINDOW; pageNo += 1) {
+        next[pageNo] = true;
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (activePage && useLazyRender) {
+      markPageWindowRendered(activePage);
+    }
+  }, [activePage, markPageWindowRendered, useLazyRender]);
 
   useEffect(() => {
     pageLinesMapRef.current = pageLinesMap;
@@ -316,11 +444,35 @@ export function DocumentPdfPreviewPage() {
       setPageLinesMap({});
       pageLinesMapRef.current = {};
       setHighlightTarget(null);
+      setEstimatedPageMetric(null);
+      setRenderedPages({});
+      setUseLazyRender(false);
       try {
         loadingTask = getDocument(rawUrl);
         const doc = await loadingTask.promise;
+        const firstPage = await doc.getPage(1);
+        const viewport = firstPage.getViewport({ scale: 1.4 });
+        const lazyMode = doc.numPages > PDF_LAZY_RENDER_THRESHOLD;
         if (!cancelled) {
           setPdfDoc(doc);
+          setEstimatedPageMetric({
+            width: Math.floor(viewport.width),
+            height: Math.floor(viewport.height),
+          });
+          setUseLazyRender(lazyMode);
+          if (lazyMode) {
+            const initialRendered: Record<number, boolean> = {};
+            for (let pageNo = 1; pageNo <= Math.min(doc.numPages, 3); pageNo += 1) {
+              initialRendered[pageNo] = true;
+            }
+            setRenderedPages(initialRendered);
+          } else {
+            const allRendered: Record<number, boolean> = {};
+            for (let pageNo = 1; pageNo <= doc.numPages; pageNo += 1) {
+              allRendered[pageNo] = true;
+            }
+            setRenderedPages(allRendered);
+          }
           pendingJumpRef.current = null;
         }
       } catch (err) {
@@ -405,6 +557,7 @@ export function DocumentPdfPreviewPage() {
     setActiveCatalogId(catalogId);
     const targetPage = typeof pageNo === 'number' && pageNo > 0 ? pageNo : 1;
     setActivePage(targetPage);
+    markPageWindowRendered(targetPage);
     const hit = scrollToCatalogTarget(title, targetPage);
     const knownLines = pageLinesMapRef.current[targetPage] ?? [];
     if (hit || knownLines.length > 0) {
@@ -445,7 +598,15 @@ export function DocumentPdfPreviewPage() {
                           style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
                         >
                           <div className="catalog-row">
-                            <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                            <div
+                              className="catalog-main-text"
+                              title={[getCatalogDisplayTitle(catalog.title, catalog.display_title), getCatalogInlinePreview(catalog.preview_text)].filter(Boolean).join(' · ')}
+                            >
+                              <span className="catalog-title-text">{getCatalogDisplayTitle(catalog.title, catalog.display_title)}</span>
+                              {getCatalogInlinePreview(catalog.preview_text) ? (
+                                <span className="catalog-inline-preview"> · {getCatalogInlinePreview(catalog.preview_text)}</span>
+                              ) : null}
+                            </div>
                             <Typography.Text type="secondary" className="catalog-line-no">
                               {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
                             </Typography.Text>
@@ -474,24 +635,21 @@ export function DocumentPdfPreviewPage() {
                   ) : pdfDoc ? (
                     <div className="pdf-preview-frame-wrap pdf-scroll-container" ref={pdfScrollRef}>
                       {pageNumbers.map((pageNumber) => (
-                        <div
+                        <LazyPdfPageShell
                           key={pageNumber}
-                          className={`pdf-page-shell ${activePage === pageNumber ? 'active' : ''}`}
-                          ref={(el) => {
-                            pageRefs.current[pageNumber] = el;
+                          pdfDoc={pdfDoc}
+                          pageNumber={pageNumber}
+                          container={pdfScrollRef.current}
+                          active={activePage === pageNumber}
+                          shouldRender={!useLazyRender || Boolean(renderedPages[pageNumber])}
+                          estimatedMetric={estimatedPageMetric}
+                          onLinesReady={onLinesReady}
+                          onRequireRender={markPageWindowRendered}
+                          registerPageRef={(pageNo, el) => {
+                            pageRefs.current[pageNo] = el;
                           }}
-                        >
-                          {highlightTarget && highlightTarget.pageNo === pageNumber ? (
-                            <div
-                              className="pdf-line-highlight"
-                              style={{ top: `${highlightTarget.top}px` }}
-                              title={highlightTarget.title}
-                            >
-                              <span className="pdf-line-highlight-badge">定位行</span>
-                            </div>
-                          ) : null}
-                          <PdfCanvasPage pdfDoc={pdfDoc} pageNumber={pageNumber} onLinesReady={onLinesReady} />
-                        </div>
+                          highlightTarget={highlightTarget}
+                        />
                       ))}
                     </div>
                   ) : (

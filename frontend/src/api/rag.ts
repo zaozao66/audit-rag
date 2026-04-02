@@ -42,6 +42,7 @@ export function uploadFiles(payload: {
   saveAfterProcessing?: boolean;
   searchable?: boolean;
   regulationGroup?: RegulationGroupOptions;
+  knowledgeLabels?: Record<string, string[]>;
 }) {
   const form = new FormData();
   payload.files.forEach((file) => form.append('files', file));
@@ -64,6 +65,9 @@ export function uploadFiles(payload: {
       form.append('version_label', payload.regulationGroup.versionLabel.trim());
     }
   }
+  if (payload.knowledgeLabels && Object.keys(payload.knowledgeLabels).length > 0) {
+    form.append('knowledge_labels', JSON.stringify(payload.knowledgeLabels));
+  }
 
   return apiFetch<UploadResponse>('/upload_store', {
     method: 'POST',
@@ -79,6 +83,7 @@ export function uploadArchive(payload: {
   saveAfterProcessing?: boolean;
   searchable?: boolean;
   regulationGroup?: RegulationGroupOptions;
+  knowledgeLabels?: Record<string, string[]>;
 }) {
   const form = new FormData();
   form.append('archive', payload.archive);
@@ -100,6 +105,9 @@ export function uploadArchive(payload: {
     if (payload.regulationGroup.versionLabel?.trim()) {
       form.append('version_label', payload.regulationGroup.versionLabel.trim());
     }
+  }
+  if (payload.knowledgeLabels && Object.keys(payload.knowledgeLabels).length > 0) {
+    form.append('knowledge_labels', JSON.stringify(payload.knowledgeLabels));
   }
 
   return apiFetch<UploadResponse>('/upload_archive_store', {
@@ -231,12 +239,14 @@ export async function streamAskWithLlm(
 export function listDocuments(params: {
   docType?: string;
   keyword?: string;
-  includeDeleted?: boolean;
+  knowledgeFilters?: Record<string, string[]>;
 }) {
   const query = new URLSearchParams();
   if (params.docType?.trim()) query.set('doc_type', params.docType.trim());
   if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
-  query.set('include_deleted', String(Boolean(params.includeDeleted)));
+  if (params.knowledgeFilters && Object.keys(params.knowledgeFilters).length > 0) {
+    query.set('knowledge_filters', JSON.stringify(params.knowledgeFilters));
+  }
   const suffix = query.toString() ? `?${query.toString()}` : '';
 
   return apiFetch<ListDocumentsResponse>(`/documents${suffix}`);
@@ -293,9 +303,9 @@ export function getDocumentIdByFilename(filename: string, includeDeleted = false
   return apiFetch<DocumentIdByFilenameResponse>(`/documents/id-by-filename?${query.toString()}`);
 }
 
-export function getDocumentChunks(docId: string, includeText: boolean) {
+export function getDocumentChunks(docId: string, includeText: boolean, includeChunks = true) {
   return apiFetch<DocumentChunksResponse>(
-    `/documents/${encodeURIComponent(docId)}/chunks?include_text=${String(includeText)}`
+    `/documents/${encodeURIComponent(docId)}/chunks?include_text=${String(includeText)}&include_chunks=${String(includeChunks)}`
   );
 }
 
@@ -494,5 +504,8 @@ function buildRetrievalPayload(options?: Partial<RetrievalOptions>) {
 
   const payload: Record<string, unknown> = {};
   if (options.retrievalMode !== undefined) payload.retrieval_mode = options.retrievalMode;
+  if (options.knowledgeFilters && Object.keys(options.knowledgeFilters).length > 0) {
+    payload.knowledge_filters = options.knowledgeFilters;
+  }
   return payload;
 }

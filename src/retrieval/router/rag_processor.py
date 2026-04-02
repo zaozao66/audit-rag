@@ -27,6 +27,7 @@ from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
 from src.ingestion.splitters.document_chunker import DocumentChunker
 from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
+from src.ingestion.splitters.technical_standard_chunker import TechnicalStandardChunker
 from src.ingestion.splitters.smart_chunker import SmartChunker
 from src.llm.providers.llm_provider import LLMProvider
 from src.retrieval.rerank.rerank_provider import RerankProvider
@@ -44,6 +45,9 @@ RECTIFICATION_STATUS_LABELS = {
 EVIDENCE_NODE_TYPES = {ontology.ENTITY_CHUNK, ontology.ENTITY_DOCUMENT}
 EMBEDDING_INPUT_MAX_CHARS = 8192
 REGULATION_DOC_TYPES = {"internal_regulation", "external_regulation"}
+ACCOUNTING_STANDARD_ROOT_PATTERN = re.compile(
+    r"^(企业会计准则第\s*[一二三四五六七八九十百千万零〇两\d]+\s*号[^\n]{0,120}|企业会计准则应用指南[^\n]{0,120})$"
+)
 
 
 class RAGProcessor:
@@ -103,6 +107,8 @@ class RAGProcessor:
     def _init_chunker(self, chunker_type, chunk_size, overlap):
         if chunker_type == "regulation":
             self.chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == "technical_standard":
+            self.chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type == "audit_report":
             self.chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type == "audit_issue":
@@ -202,6 +208,11 @@ class RAGProcessor:
             if section_path is None:
                 section_path = chunk.get("section_path", [])
 
+            knowledge_labels = metadata.get("knowledge_labels")
+            if knowledge_labels is None:
+                knowledge_labels = chunk.get("knowledge_labels", {})
+            knowledge_labels = self._normalize_knowledge_labels(knowledge_labels)
+
             formatted.append(
                 {
                     "chunk_index": chunk_index,
@@ -217,6 +228,7 @@ class RAGProcessor:
                         "header": metadata.get("header", chunk.get("header", "")),
                         "section_path": section_path or [],
                         "semantic_boundary": metadata.get("semantic_boundary", chunk.get("semantic_boundary", "")),
+                        "knowledge_labels": knowledge_labels,
                     },
                 }
             )
@@ -337,6 +349,27 @@ class RAGProcessor:
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
+
+    @staticmethod
+    def _normalize_knowledge_labels(raw_labels: Any) -> Dict[str, List[str]]:
+        if not isinstance(raw_labels, dict):
+            return {}
+
+        normalized: Dict[str, List[str]] = {}
+        for raw_key, raw_value in raw_labels.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if isinstance(raw_value, list):
+                values = [str(item or "").strip() for item in raw_value]
+            elif raw_value is None:
+                values = []
+            else:
+                values = [str(raw_value or "").strip()]
+            values = [item for item in values if item]
+            if values:
+                normalized[key] = values
+        return normalized
 
     def _resolve_regulation_group_meta(self, doc: Dict[str, Any]) -> Tuple[str, str, str]:
         doc_type = str(doc.get("doc_type", "") or "").strip()
@@ -633,6 +666,11 @@ class RAGProcessor:
                 doc["doc_id"] = doc_id
                 changed = True
 
+            normalized_labels = self._normalize_knowledge_labels(doc.get("knowledge_labels", {}))
+            if doc.get("knowledge_labels") != normalized_labels:
+                doc["knowledge_labels"] = normalized_labels
+                changed = True
+
             old_chunk_id = doc.get("chunk_id")
             chunk_id = str(old_chunk_id) if old_chunk_id else f"{doc_id}_chunk_{idx}"
             if chunk_id in seen_chunk_ids:
@@ -730,6 +768,8 @@ class RAGProcessor:
             group_id, group_name, version_label = self._resolve_regulation_group_meta(doc)
             storage_file_id = str(doc.get("storage_file_id", "") or "").strip()
             searchable = self._to_bool(doc.get("searchable", True))
+            knowledge_labels = self._normalize_knowledge_labels(doc.get("knowledge_labels", {}))
+            doc["knowledge_labels"] = knowledge_labels
             doc["doc_id"] = doc_id
 
             existing = self.metadata_store.get_document(doc_id)
@@ -738,6 +778,7 @@ class RAGProcessor:
             for chunk in chunks:
                 chunk["searchable"] = searchable
                 chunk["status"] = "active"
+                chunk["knowledge_labels"] = knowledge_labels
             self._log_oversized_chunks(chunks)
 
             if not chunks:
@@ -766,6 +807,7 @@ class RAGProcessor:
                     "version_label": version_label,
                     "storage_file_id": storage_file_id,
                     "searchable": searchable,
+                    "knowledge_labels": knowledge_labels,
                 })
                 continue
 
@@ -780,6 +822,7 @@ class RAGProcessor:
                 "version_label": version_label,
                 "storage_file_id": storage_file_id,
                 "searchable": searchable,
+                "knowledge_labels": knowledge_labels,
             }
             pending_new_entries.append(entry)
             if searchable:
@@ -847,6 +890,9 @@ class RAGProcessor:
             if storage_file_id and existing.storage_file_id != storage_file_id:
                 existing.storage_file_id = storage_file_id
                 metadata_changed = True
+            if existing.knowledge_labels != entry["knowledge_labels"]:
+                existing.knowledge_labels = dict(entry["knowledge_labels"])
+                metadata_changed = True
             if entry["group_id"] and existing.regulation_group_id != entry["group_id"]:
                 existing.regulation_group_id = entry["group_id"]
                 metadata_changed = True
@@ -889,6 +935,7 @@ class RAGProcessor:
                 regulation_group_name=str(entry.get("group_name", "") or ""),
                 version_label=str(entry.get("version_label", "") or ""),
                 storage_file_id=storage_file_id,
+                knowledge_labels=dict(entry.get("knowledge_labels", {}) or {}),
             )
 
             is_new = self.metadata_store.add_document(record, save=False)
@@ -924,8 +971,15 @@ class RAGProcessor:
         top_k: int,
         doc_types: List[str] = None,
         titles: List[str] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
     ) -> List[Dict[str, Any]]:
-        results = self.retriever.search(query, top_k=top_k, doc_types=doc_types, titles=titles)
+        results = self.retriever.search(
+            query,
+            top_k=top_k,
+            doc_types=doc_types,
+            titles=titles,
+            knowledge_filters=self._normalize_knowledge_labels(knowledge_filters),
+        )
         formatted = []
         for r in results:
             doc = r.metadata or {}
@@ -947,13 +1001,20 @@ class RAGProcessor:
         query: str,
         top_k: int,
         doc_types: List[str] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
         graph_hops: int = 2,
     ) -> List[Dict[str, Any]]:
         self._ensure_graph_index()
         if not self.graph_retriever:
             return []
 
-        results = self.graph_retriever.search(query, top_k=top_k, doc_types=doc_types, hops=graph_hops)
+        results = self.graph_retriever.search(
+            query,
+            top_k=top_k,
+            doc_types=doc_types,
+            knowledge_filters=self._normalize_knowledge_labels(knowledge_filters),
+            hops=graph_hops,
+        )
         formatted = []
         for r in results:
             doc = r.metadata or {}
@@ -1037,6 +1098,7 @@ class RAGProcessor:
         rerank_top_k: int = 10,
         doc_types: List[str] = None,
         titles: List[str] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
         use_graph: bool = False,
         retrieval_mode: str = "vector",
         graph_top_k: int = 12,
@@ -1062,6 +1124,7 @@ class RAGProcessor:
                 top_k=max(initial_top_k, top_k),
                 doc_types=doc_types,
                 titles=titles,
+                knowledge_filters=knowledge_filters,
             )
 
         if mode in {"graph", "hybrid"}:
@@ -1069,6 +1132,7 @@ class RAGProcessor:
                 query,
                 top_k=max(graph_top_k, top_k),
                 doc_types=doc_types,
+                knowledge_filters=knowledge_filters,
                 graph_hops=graph_hops,
             )
 
@@ -1119,6 +1183,7 @@ class RAGProcessor:
             use_rerank=params["use_rerank"],
             rerank_top_k=params["rerank_top_k"],
             doc_types=params["doc_types"],
+            knowledge_filters=params.get("knowledge_filters"),
             use_graph=params["use_graph"],
             retrieval_mode=params["retrieval_mode"],
             graph_top_k=params["graph_top_k"],
@@ -1162,6 +1227,7 @@ class RAGProcessor:
             use_rerank=params["use_rerank"],
             rerank_top_k=params["rerank_top_k"],
             doc_types=params["doc_types"],
+            knowledge_filters=params.get("knowledge_filters"),
             use_graph=params["use_graph"],
             retrieval_mode=params["retrieval_mode"],
             graph_top_k=params["graph_top_k"],
@@ -1556,6 +1622,7 @@ class RAGProcessor:
                     "page_nos": doc.get("page_nos", []),
                     "header": doc.get("header", ""),
                     "section_path": doc.get("section_path", []),
+                    "knowledge_labels": self._normalize_knowledge_labels(doc.get("knowledge_labels", {})),
                     "vector_score": res.get("vector_score"),
                     "graph_score": res.get("graph_score"),
                 }
@@ -1576,6 +1643,7 @@ class RAGProcessor:
                 "page_nos": doc.get("page_nos", []),
                 "header": doc.get("header", ""),
                 "section_path": doc.get("section_path", []),
+                "knowledge_labels": self._normalize_knowledge_labels(doc.get("knowledge_labels", {})),
             }
             if graph_evidence:
                 citation_item["graph_evidence"] = graph_evidence
@@ -2294,13 +2362,48 @@ class RAGProcessor:
             return {"processed": 0, "skipped": 0, "updated": 0, "total_chunks": 0}
         return self.process_documents(processed_documents, save_after_processing=save_after_processing)
 
-    def list_documents(self, doc_type: str = None, keyword: str = None, include_deleted: bool = False) -> List[Dict]:
+    def _refresh_metadata_store(self) -> None:
+        try:
+            self.metadata_store.refresh_if_changed()
+        except Exception as e:
+            logger.warning("刷新文档元数据失败: %s", e)
+
+    @staticmethod
+    def _record_matches_knowledge_filters(record: Any, knowledge_filters: Optional[Dict[str, List[str]]]) -> bool:
+        if not knowledge_filters:
+            return True
+
+        raw_labels = getattr(record, "knowledge_labels", {}) or {}
+        normalized_labels = RAGProcessor._normalize_knowledge_labels(raw_labels)
+        normalized_filters = RAGProcessor._normalize_knowledge_labels(knowledge_filters)
+        for key, expected_values in normalized_filters.items():
+            if not expected_values:
+                continue
+            actual_values = normalized_labels.get(key, [])
+            if not actual_values:
+                return False
+            if not set(actual_values).intersection(expected_values):
+                return False
+        return True
+
+    def list_documents(
+        self,
+        doc_type: str = None,
+        keyword: str = None,
+        include_deleted: bool = False,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
+    ) -> List[Dict]:
+        self._refresh_metadata_store()
         self._backfill_regulation_groups_if_needed()
         status = None if include_deleted else "active"
         records = self.metadata_store.list_documents(doc_type=doc_type, status=status, keyword=keyword)
+        normalized_filters = self._normalize_knowledge_labels(knowledge_filters)
+        if normalized_filters:
+            records = [r for r in records if self._record_matches_knowledge_filters(r, normalized_filters)]
         return [r.to_dict() for r in records]
 
     def list_regulation_groups(self, keyword: str = None, include_deleted: bool = False) -> List[Dict[str, Any]]:
+        self._refresh_metadata_store()
         self._backfill_regulation_groups_if_needed()
         status = None if include_deleted else "active"
         records = self.metadata_store.list_documents(status=status)
@@ -2339,6 +2442,7 @@ class RAGProcessor:
         return groups
 
     def list_regulation_versions(self, group_id: str, include_deleted: bool = False) -> List[Dict[str, Any]]:
+        self._refresh_metadata_store()
         self._backfill_regulation_groups_if_needed()
         target_group_id = str(group_id or "").strip()
         if not target_group_id:
@@ -2362,6 +2466,7 @@ class RAGProcessor:
         keyword: str = "",
         limit: int = 500,
     ) -> Dict[str, Any]:
+        self._refresh_metadata_store()
         self._backfill_regulation_groups_if_needed()
 
         left_id = str(left_doc_id or "").strip()
@@ -2477,6 +2582,7 @@ class RAGProcessor:
         }
 
     def get_document_id_by_filename(self, filename: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        self._refresh_metadata_store()
         target_name = str(filename or "").strip()
         if not target_name:
             return None
@@ -2508,6 +2614,7 @@ class RAGProcessor:
         }
 
     def get_document_detail_by_filename(self, filename: str) -> Optional[Dict]:
+        self._refresh_metadata_store()
         target_name = str(filename or "").strip()
         if not target_name:
             return None
@@ -2524,6 +2631,7 @@ class RAGProcessor:
         return self.get_document_detail(exact[0].doc_id)
 
     def get_document_detail(self, doc_id: str) -> Optional[Dict]:
+        self._refresh_metadata_store()
         self._backfill_regulation_groups_if_needed()
         record = self.metadata_store.get_document(doc_id)
         if not record:
@@ -2643,6 +2751,168 @@ class RAGProcessor:
     def _normalize_for_line_match(text: str) -> str:
         return re.sub(r"\s+", "", str(text or ""))
 
+    @staticmethod
+    def _infer_catalog_node_type(semantic_boundary: str, header: str) -> str:
+        boundary = str(semantic_boundary or "").strip().lower()
+        normalized_header = str(header or "").strip()
+
+        if boundary in {"chapter", "section", "article", "content"}:
+            return boundary
+        if normalized_header.startswith("第") and "章" in normalized_header:
+            return "chapter"
+        if normalized_header.startswith("第") and "节" in normalized_header:
+            return "section"
+        if normalized_header.startswith("第") and "条" in normalized_header:
+            return "article"
+        return "content"
+
+    @staticmethod
+    def _build_catalog_display_title(node_type: str, title: str) -> str:
+        normalized_title = str(title or "").strip()
+        if not normalized_title:
+            return ""
+        if node_type == "article":
+            match = re.search(r"(第[一二三四五六七八九十百千万零〇两\d]+条)", normalized_title)
+            if match:
+                return match.group(1).strip()
+        return normalized_title
+
+    @classmethod
+    def _build_catalog_preview_text(
+        cls,
+        text: str,
+        section_path: List[str],
+        title: str,
+        display_title: str,
+        node_type: str,
+    ) -> str:
+        if node_type != "article":
+            return ""
+
+        cleaned = PAGE_PATTERN.sub(" ", str(text or ""))
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return ""
+
+        for prefix in [*section_path, title, display_title]:
+            normalized_prefix = str(prefix or "").strip()
+            if normalized_prefix and cleaned.startswith(normalized_prefix):
+                cleaned = cleaned[len(normalized_prefix):].lstrip("：:，,。；;、-— \t")
+
+        return cleaned[:120].strip()
+
+    @classmethod
+    def _extract_chunk_anchor_text(cls, chunk: Dict[str, Any]) -> str:
+        metadata = chunk.get("metadata", {}) or {}
+        header = str(metadata.get("header", "") or "").strip()
+        raw_text = str(chunk.get("text", "") or "")
+        if not raw_text:
+            return header
+
+        lines = [
+            PAGE_PATTERN.sub("", str(line or "")).strip()
+            for line in raw_text.splitlines()
+        ]
+        lines = [line for line in lines if line]
+        if not lines:
+            return header
+
+        normalized_header = cls._normalize_for_line_match(header)
+        header_idx = 0
+        if normalized_header:
+            for idx, line in enumerate(lines):
+                normalized_line = cls._normalize_for_line_match(line)
+                if normalized_line == normalized_header or normalized_line.startswith(normalized_header):
+                    header_idx = idx
+                    break
+
+        anchor = lines[header_idx]
+        if normalized_header and cls._normalize_for_line_match(anchor) == normalized_header:
+            for next_line in lines[header_idx + 1: header_idx + 4]:
+                normalized_next = cls._normalize_for_line_match(next_line)
+                if not normalized_next:
+                    continue
+                if re.match(r"^第[一二三四五六七八九十百千万零〇两\d]+[章节条款]", next_line):
+                    continue
+                anchor = f"{anchor}{next_line}"
+                break
+
+        return anchor[:80].strip()
+
+    def _find_chunk_line_no(
+        self,
+        full_text_lines: List[str],
+        chunk: Dict[str, Any],
+        start_idx: int = 0,
+        skip_ranges: Optional[List[Tuple[int, int]]] = None,
+    ) -> Optional[int]:
+        if not full_text_lines:
+            return None
+
+        metadata = chunk.get("metadata", {}) or {}
+        header = str(metadata.get("header", "") or "").strip()
+        anchor_text = self._extract_chunk_anchor_text(chunk)
+
+        normalized_anchor = self._normalize_for_line_match(anchor_text)
+        normalized_header = self._normalize_for_line_match(header)
+        min_anchor_len = max(len(normalized_header) + 4, 12)
+
+        def match_at(index: int) -> bool:
+            if skip_ranges and self._is_line_in_ranges(index, skip_ranges):
+                return False
+            normalized_line = self._normalize_for_line_match(full_text_lines[index])
+            if not normalized_line:
+                return False
+            if normalized_anchor and len(normalized_anchor) >= min_anchor_len:
+                if normalized_line.startswith(normalized_anchor) or normalized_anchor.startswith(normalized_line):
+                    return True
+            if normalized_header and normalized_line.startswith(normalized_header):
+                return True
+            return False
+
+        for idx in range(max(0, start_idx), len(full_text_lines)):
+            if match_at(idx):
+                return idx + 1
+
+        for idx in range(0, max(0, start_idx)):
+            if match_at(idx):
+                return idx + 1
+
+        return None
+
+    @staticmethod
+    def _detect_special_root_headings(full_text_lines: List[str]) -> List[Dict[str, Any]]:
+        roots: List[Dict[str, Any]] = []
+        for idx, raw_line in enumerate(full_text_lines):
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            if not ACCOUNTING_STANDARD_ROOT_PATTERN.match(line):
+                continue
+            roots.append(
+                {
+                    "title": line,
+                    "line_no": idx + 1,
+                    "level": 1,
+                    "section_path": [line],
+                    "node_type": "root",
+                    "display_title": line,
+                    "preview_text": "",
+                    "chunk_id": "",
+                }
+            )
+        return roots
+
+    @staticmethod
+    def _find_active_root_heading(root_headings: List[Dict[str, Any]], line_no: int) -> Optional[Dict[str, Any]]:
+        active: Optional[Dict[str, Any]] = None
+        for item in root_headings:
+            if int(item.get("line_no", 0) or 0) <= line_no:
+                active = item
+                continue
+            break
+        return active
+
     def _split_full_text_lines_with_page_map(self, full_text: str) -> Tuple[List[str], List[Optional[int]]]:
         lines: List[str] = []
         line_pages: List[Optional[int]] = []
@@ -2751,6 +3021,40 @@ class RAGProcessor:
 
         return None
 
+    def _find_header_line_no_before(
+        self,
+        full_text_lines: List[str],
+        header: str,
+        end_idx: int,
+        skip_ranges: Optional[List[Tuple[int, int]]] = None,
+        max_window: int = 160,
+    ) -> Optional[int]:
+        if not full_text_lines:
+            return None
+
+        normalized_header = self._normalize_for_line_match(header)
+        if not normalized_header:
+            return None
+
+        end_idx = min(max(0, end_idx), len(full_text_lines) - 1)
+        start_idx = max(0, end_idx - max(0, max_window) + 1)
+
+        for idx in range(end_idx, start_idx - 1, -1):
+            if skip_ranges and self._is_line_in_ranges(idx, skip_ranges):
+                continue
+            normalized_line = self._normalize_for_line_match(full_text_lines[idx])
+            if normalized_line.startswith(normalized_header):
+                return idx + 1
+
+        for idx in range(end_idx, -1, -1):
+            if skip_ranges and self._is_line_in_ranges(idx, skip_ranges):
+                continue
+            normalized_line = self._normalize_for_line_match(full_text_lines[idx])
+            if normalized_line.startswith(normalized_header):
+                return idx + 1
+
+        return None
+
     def _build_catalog_from_full_text(
         self,
         chunks: List[Dict[str, Any]],
@@ -2767,6 +3071,10 @@ class RAGProcessor:
         catalog_by_key: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         search_start_idx = 0
         toc_ranges = self._detect_toc_line_ranges(full_text_lines)
+        root_headings = self._detect_special_root_headings(full_text_lines)
+
+        for root in root_headings:
+            catalog_by_key[tuple(root.get("section_path", []))] = dict(root)
 
         for chunk in ordered_chunks:
             metadata = chunk.get("metadata", {}) or {}
@@ -2785,13 +3093,19 @@ class RAGProcessor:
             if not node_titles:
                 continue
 
-            for idx, node_title in enumerate(node_titles):
-                catalog_path = node_titles[: idx + 1]
-                catalog_key = tuple(catalog_path)
-
+            line_no = self._find_chunk_line_no(
+                full_text_lines,
+                chunk,
+                start_idx=search_start_idx,
+                skip_ranges=toc_ranges,
+            )
+            if line_no is not None:
+                search_start_idx = max(search_start_idx, line_no - 1)
+            else:
+                fallback_title = header or (node_titles[-1] if node_titles else "")
                 line_no = self._find_header_line_no(
                     full_text_lines,
-                    node_title,
+                    fallback_title,
                     start_idx=search_start_idx,
                     skip_ranges=toc_ranges,
                 )
@@ -2800,15 +3114,56 @@ class RAGProcessor:
                 else:
                     line_no = 1
 
+            active_root = self._find_active_root_heading(root_headings, line_no)
+            root_title = str((active_root or {}).get("title", "") or "").strip()
+            root_prefix = [root_title] if root_title else []
+
+            node_line_nos: List[int] = [line_no] * len(node_titles)
+            if len(node_titles) > 1:
+                cursor_end = max(0, line_no - 2)
+                for reverse_idx in range(len(node_titles) - 2, -1, -1):
+                    candidate_line = self._find_header_line_no_before(
+                        full_text_lines,
+                        node_titles[reverse_idx],
+                        end_idx=cursor_end,
+                        skip_ranges=toc_ranges,
+                    )
+                    if candidate_line is None:
+                        candidate_line = node_line_nos[reverse_idx + 1]
+                    node_line_nos[reverse_idx] = candidate_line
+                    cursor_end = max(0, candidate_line - 2)
+
+            for idx, node_title in enumerate(node_titles):
+                catalog_path = root_prefix + node_titles[: idx + 1]
+                catalog_key = tuple(catalog_path)
+                node_line_no = node_line_nos[idx] if idx < len(node_line_nos) else line_no
+
                 if idx == len(node_titles) - 1 and header:
                     level = self._infer_catalog_level(semantic_boundary, header, section_path)
+                    node_type = self._infer_catalog_node_type(semantic_boundary, header)
                 else:
                     level = max(1, min(6, idx + 1))
+                    node_type = self._infer_catalog_node_type("", node_title)
+
+                if root_title:
+                    level += 1
+
+                display_title = self._build_catalog_display_title(node_type, node_title)
+                preview_text = self._build_catalog_preview_text(
+                    str(chunk.get("text", "") or ""),
+                    catalog_path[:-1],
+                    node_title,
+                    display_title,
+                    node_type,
+                )
 
                 candidate = {
                     "title": node_title,
+                    "display_title": display_title,
+                    "preview_text": preview_text,
+                    "node_type": node_type,
                     "level": level,
-                    "line_no": line_no,
+                    "line_no": node_line_no,
                     "chunk_id": chunk.get("chunk_id", ""),
                     "section_path": catalog_path,
                 }
@@ -2818,10 +3173,55 @@ class RAGProcessor:
                 if existing is None or int(candidate["line_no"]) >= int(existing["line_no"]):
                     catalog_by_key[catalog_key] = candidate
 
+        catalog_items = list(catalog_by_key.values())
+        for item in catalog_items:
+            node_type = str(item.get("node_type", "") or "")
+            if node_type not in {"chapter", "section", "root"}:
+                continue
+            section_path = tuple(str(part).strip() for part in (item.get("section_path") or []) if str(part).strip())
+            if not section_path:
+                continue
+
+            child_line_nos = [
+                int(candidate.get("line_no", 0) or 0)
+                for candidate in catalog_items
+                if tuple(str(part).strip() for part in (candidate.get("section_path") or []) if str(part).strip())[:len(section_path)] == section_path
+                and len(tuple(str(part).strip() for part in (candidate.get("section_path") or []) if str(part).strip())) > len(section_path)
+                and int(candidate.get("line_no", 0) or 0) > 0
+            ]
+            if child_line_nos:
+                item["line_no"] = min(child_line_nos)
+
         catalog = sorted(
-            catalog_by_key.values(),
+            catalog_items,
             key=lambda item: (int(item.get("line_no", 0) or 0), int(item.get("level", 0) or 0)),
         )
+
+        duplicate_article_titles = defaultdict(int)
+        for item in catalog:
+            if str(item.get("node_type", "")) != "article":
+                continue
+            display_title = str(item.get("display_title", "") or item.get("title", "")).strip()
+            if display_title:
+                duplicate_article_titles[display_title] += 1
+
+        for item in catalog:
+            if str(item.get("node_type", "")) != "article":
+                continue
+            display_title = str(item.get("display_title", "") or item.get("title", "")).strip()
+            if duplicate_article_titles.get(display_title, 0) <= 1:
+                continue
+            section_path = [str(part).strip() for part in (item.get("section_path") or []) if str(part).strip()]
+            context_parts = [part for part in section_path[:-1] if "第" not in part or "条" not in part]
+            context = ""
+            if context_parts:
+                context = context_parts[0] if len(context_parts) == 1 else " / ".join(context_parts[-2:])
+            page_no = item.get("page_no")
+            if not context and isinstance(page_no, int) and page_no > 0:
+                context = f"P{page_no}"
+            if context:
+                item["display_title"] = f"{context} · {display_title}"
+
         for i, item in enumerate(catalog):
             item["id"] = f"catalog_{i + 1}"
 
@@ -2851,7 +3251,8 @@ class RAGProcessor:
 
         return [], [], "missing_full_text"
 
-    def get_document_chunks(self, doc_id: str, include_text: bool = True) -> Dict:
+    def get_document_chunks(self, doc_id: str, include_text: bool = True, include_chunks: bool = True) -> Dict:
+        self._refresh_metadata_store()
         record = self.metadata_store.get_document(doc_id)
         if not record:
             return {"error": "文档不存在"}
@@ -2885,8 +3286,12 @@ class RAGProcessor:
         total_lines = len(full_text_lines)
 
         if not include_text:
-            chunks = [{k: v for k, v in c.items() if k != "text"} for c in chunks]
             full_text_lines = []
+        if include_chunks:
+            if not include_text:
+                chunks = [{k: v for k, v in c.items() if k != "text"} for c in chunks]
+        else:
+            chunks = []
 
         return {
             "doc_id": doc_id,
@@ -2904,10 +3309,11 @@ class RAGProcessor:
         }
 
     def delete_document(self, doc_id: str) -> Dict:
+        self._refresh_metadata_store()
         record = self.metadata_store.get_document(doc_id)
         if not record:
             return {"success": False, "error": "文档不存在"}
-        if not self.metadata_store.delete_document(doc_id):
+        if not self.metadata_store.delete_document(doc_id, soft_delete=False):
             return {"success": False, "error": "文档不存在"}
 
         removed_chunks = 0
@@ -2940,6 +3346,7 @@ class RAGProcessor:
         }
 
     def get_document_stats(self) -> Dict:
+        self._refresh_metadata_store()
         return self.metadata_store.get_stats()
 
     def clear_all_documents(self) -> Dict:

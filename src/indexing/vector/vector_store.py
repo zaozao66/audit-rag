@@ -52,7 +52,42 @@ class VectorStore:
         # 保存文档信息
         self.documents.extend(documents)
     
-    def search(self, query_embedding: List[float], top_k: int = 5, doc_types: List[str] = None, titles: List[str] = None) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _matches_knowledge_filters(doc: Dict[str, Any], knowledge_filters: Optional[Dict[str, List[str]]]) -> bool:
+        if not knowledge_filters:
+            return True
+
+        raw_labels = doc.get('knowledge_labels', {}) or {}
+        if not isinstance(raw_labels, dict):
+            return False
+
+        for raw_key, raw_expected in knowledge_filters.items():
+            key = str(raw_key or '').strip()
+            expected = [str(item or '').strip() for item in (raw_expected or []) if str(item or '').strip()]
+            if not key or not expected:
+                continue
+
+            current = raw_labels.get(key, [])
+            if isinstance(current, list):
+                current_values = {str(item or '').strip() for item in current if str(item or '').strip()}
+            elif current is None:
+                current_values = set()
+            else:
+                current_values = {str(current).strip()} if str(current).strip() else set()
+
+            if not current_values.intersection(expected):
+                return False
+
+        return True
+
+    def search(
+        self,
+        query_embedding: List[float],
+        top_k: int = 5,
+        doc_types: List[str] = None,
+        titles: List[str] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
+    ) -> List[Dict[str, Any]]:
         """
         搜索最相似的向量
         :param query_embedding: 查询向量
@@ -90,6 +125,8 @@ class VectorStore:
                     continue
                     
                 if titles and doc.get('title') not in titles:
+                    continue
+                if not self._matches_knowledge_filters(doc, knowledge_filters):
                     continue
                 
                 result = {

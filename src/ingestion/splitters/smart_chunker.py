@@ -2,6 +2,7 @@ import logging
 from typing import List, Dict, Any
 from src.ingestion.splitters.document_chunker import DocumentChunker
 from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
+from src.ingestion.splitters.technical_standard_chunker import TechnicalStandardChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
 from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 
@@ -23,6 +24,7 @@ class SmartChunker:
         
         # 初始化各种分块器
         self.law_chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
+        self.technical_chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
         self.audit_chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
         self.issue_chunker = AuditIssueChunker(chunk_size=chunk_size, overlap=overlap)
         self.default_chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
@@ -40,22 +42,32 @@ class SmartChunker:
         for doc in documents:
             doc_type = doc.get('doc_type', '')
             filename = doc.get('filename', '')
-            
+
+            is_regulation_doc_type = doc_type in ['internal_regulation', 'external_regulation']
+            is_technical_standard = self.technical_chunker._is_technical_standard(doc)
+
             # 根据文档类型选择分块器
             if doc_type == 'audit_issue' or self.issue_chunker._is_audit_issue(doc):
-                # 使用审计问题分块器
                 logger.info(f"文档 {filename} 使用审计问题分块器")
                 chunks = self.issue_chunker.chunk_audit_issues(doc)
+            elif is_regulation_doc_type:
+                if is_technical_standard:
+                    logger.info(f"文档 {filename} 使用技术规范分块器")
+                    chunks = self.technical_chunker.chunk_technical_standard(doc)
+                else:
+                    logger.info(f"文档 {filename} 使用法规文档分块器")
+                    chunks = self.law_chunker.chunk_law_document(doc)
             elif doc_type in ['internal_report', 'external_report'] or self.audit_chunker._is_audit_report(doc):
-                # 使用审计报告分块器
                 logger.info(f"文档 {filename} 使用审计报告分块器")
                 chunks = self.audit_chunker.chunk_audit_report(doc)
-            elif doc_type in ['internal_regulation', 'external_regulation'] or self.law_chunker._is_law_document(doc):
-                # 使用法规文档分块器
-                logger.info(f"文档 {filename} 使用法规文档分块器")
-                chunks = self.law_chunker.chunk_law_document(doc)
+            elif self.law_chunker._is_law_document(doc):
+                if is_technical_standard:
+                    logger.info(f"文档 {filename} 使用技术规范分块器")
+                    chunks = self.technical_chunker.chunk_technical_standard(doc)
+                else:
+                    logger.info(f"文档 {filename} 使用法规文档分块器")
+                    chunks = self.law_chunker.chunk_law_document(doc)
             else:
-                # 使用默认分块器
                 logger.info(f"文档 {filename} 使用默认分块器")
                 chunks = self.default_chunker.chunk_documents([doc])
             

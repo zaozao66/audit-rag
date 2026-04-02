@@ -40,6 +40,10 @@ function getCatalogLevel(item: DocumentCatalogItem) {
   return Number.isFinite(level) && level > 0 ? level : 1;
 }
 
+function getCatalogDisplayTitle(item: DocumentCatalogItem) {
+  return String(item.display_title || item.title || '').trim() || '（未命名条目）';
+}
+
 function documentLabelOf(doc: DocumentRecord) {
   const parts = [doc.filename || doc.doc_id];
   const extra = doc.version_label || doc.regulation_group_name || doc.upload_time;
@@ -78,7 +82,7 @@ export function RegulationComparePage() {
       setLoadingDocuments(true);
       setError('');
       try {
-        const response = await listDocuments({ includeDeleted: false });
+        const response = await listDocuments({});
         const items = response.documents || [];
         setDocuments(items);
         if (items.length < 2) {
@@ -311,7 +315,10 @@ export function RegulationComparePage() {
     const byChunk = chunkMap.get(String(catalog.chunk_id || '').trim());
     if (byChunk) return byChunk;
     const byTitle = titleMap.get(normalizeCatalogText(catalog.title));
-    return byTitle || '';
+    if (byTitle) return byTitle;
+    const byDisplayTitle = titleMap.get(normalizeCatalogText(catalog.display_title || ''));
+    if (byDisplayTitle) return byDisplayTitle;
+    return '';
   };
 
   const leftCatalogIndexMap = useMemo(() => {
@@ -508,7 +515,7 @@ export function RegulationComparePage() {
                               style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
                             >
                               <div className="catalog-row">
-                                <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                                <Typography.Text ellipsis>{getCatalogDisplayTitle(catalog)}</Typography.Text>
                               </div>
                             </List.Item>
                           )}
@@ -579,7 +586,7 @@ export function RegulationComparePage() {
                               style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
                             >
                               <div className="catalog-row">
-                                <Typography.Text ellipsis>{catalog.title}</Typography.Text>
+                                <Typography.Text ellipsis>{getCatalogDisplayTitle(catalog)}</Typography.Text>
                               </div>
                             </List.Item>
                           )}

@@ -1,7 +1,7 @@
 import logging
 import os
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.factory import RAGFactory
 from src.retrieval.router.rag_processor import RAGProcessor
@@ -84,6 +84,111 @@ class RAGService:
         resolved_scope = self.resolve_scope(scope, config=effective_config)
         scope_configs = self._collect_scope_configs(effective_config)
         return dict(scope_configs.get(resolved_scope, {}))
+
+    @staticmethod
+    def _normalize_classification_field(raw_field: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(raw_field, dict):
+            return None
+
+        key = str(raw_field.get("key", "") or "").strip()
+        if not key:
+            return None
+
+        label = str(raw_field.get("label", "") or key).strip() or key
+        required = bool(raw_field.get("required", False))
+        multiple = bool(raw_field.get("multiple", False))
+
+        normalized_options: List[Dict[str, str]] = []
+        for option in raw_field.get("options", []) or []:
+            if isinstance(option, dict):
+                value = str(option.get("value", "") or "").strip()
+                option_label = str(option.get("label", "") or value).strip()
+            else:
+                value = str(option or "").strip()
+                option_label = value
+            if not value:
+                continue
+            normalized_options.append({"value": value, "label": option_label or value})
+
+        return {
+            "key": key,
+            "label": label,
+            "required": required,
+            "multiple": multiple,
+            "options": normalized_options,
+        }
+
+    def get_scope_classification_fields(
+        self,
+        scope: Optional[str],
+        config: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        scope_config = self.get_scope_config(scope, config=config)
+        raw_fields = scope_config.get("classification_fields", [])
+        if not isinstance(raw_fields, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for raw in raw_fields:
+            field = self._normalize_classification_field(raw)
+            if field:
+                normalized.append(field)
+        return normalized
+
+    def normalize_scope_knowledge_labels(
+        self,
+        scope: Optional[str],
+        raw_labels: Any,
+        require_required_fields: bool = False,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, List[str]]:
+        fields = self.get_scope_classification_fields(scope, config=config)
+        field_map = {str(item.get("key", "")).strip(): item for item in fields if str(item.get("key", "")).strip()}
+
+        if raw_labels is None:
+            raw_dict: Dict[str, Any] = {}
+        elif isinstance(raw_labels, dict):
+            raw_dict = dict(raw_labels)
+        else:
+            raise ValueError("knowledge_labels 必须是对象")
+
+        normalized: Dict[str, List[str]] = {}
+        for raw_key, raw_value in raw_dict.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if field_map and key not in field_map:
+                raise ValueError(f"不支持的知识分类字段: {key}")
+
+            if isinstance(raw_value, list):
+                values = [str(item or "").strip() for item in raw_value]
+            else:
+                values = [str(raw_value or "").strip()]
+            values = [item for item in values if item]
+
+            field_cfg = field_map.get(key)
+            if field_cfg and not field_cfg.get("multiple") and len(values) > 1:
+                raise ValueError(f"知识分类字段 {key} 仅支持单选")
+
+            allowed_values = {
+                str(option.get("value", "")).strip()
+                for option in (field_cfg or {}).get("options", [])
+                if str(option.get("value", "")).strip()
+            }
+            if allowed_values:
+                for item in values:
+                    if item not in allowed_values:
+                        raise ValueError(f"知识分类字段 {key} 的值不合法: {item}")
+
+            if values:
+                normalized[key] = values
+
+        if require_required_fields:
+            for field in fields:
+                if field.get("required") and not normalized.get(field["key"]):
+                    raise ValueError(f"缺少必填知识分类字段: {field['label']}")
+
+        return normalized
 
     @staticmethod
     def _merge_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
