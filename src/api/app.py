@@ -8,6 +8,7 @@ from src.api.routes.chat import chat_bp
 from src.api.routes.documents import documents_bp
 from src.api.routes.ai_proxy import ai_proxy_bp
 from src.api.routes.files import files_bp
+from src.api.routes.reports import reports_bp
 from src.api.routes.storage import storage_bp
 from src.api.routes.system import system_bp
 from src.audio.services.media_store import MediaStore
@@ -159,5 +160,6 @@ def create_app() -> Flask:
     app.register_blueprint(audio_bp)
     app.register_blueprint(documents_bp)
     app.register_blueprint(ai_proxy_bp)
+    app.register_blueprint(reports_bp)
 
     return app
