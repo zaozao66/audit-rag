@@ -3,6 +3,27 @@ from typing import Any, Dict, List, Union
 from flask import Flask
 from flask_cors import CORS
 
+
+class _StripPrefixMiddleware:
+    """WSGI middleware that strips a URL prefix.
+
+    Allows the frontend to call /rag-api/* and have the prefix transparently
+    removed before Flask routing, matching what Vite's dev proxy and Nginx do
+    in development/production respectively.
+    """
+
+    def __init__(self, wsgi_app, prefix: str = '/rag-api'):
+        self._app = wsgi_app
+        self._prefix = prefix.rstrip('/')
+
+    def __call__(self, environ, start_response):
+        path = environ.get('PATH_INFO', '')
+        if path.startswith(self._prefix + '/'):
+            environ['PATH_INFO'] = path[len(self._prefix):]
+        elif path == self._prefix:
+            environ['PATH_INFO'] = '/'
+        return self._app(environ, start_response)
+
 from src.api.routes.audio import audio_bp
 from src.api.routes.chat import chat_bp
 from src.api.routes.documents import documents_bp
@@ -161,5 +182,9 @@ def create_app() -> Flask:
     app.register_blueprint(documents_bp)
     app.register_blueprint(ai_proxy_bp)
     app.register_blueprint(reports_bp)
+
+    # Strip /rag-api prefix so the frontend can use the same path whether
+    # served by this server, Vite dev proxy, or Nginx in production.
+    app.wsgi_app = _StripPrefixMiddleware(app.wsgi_app, prefix='/rag-api')
 
     return app
