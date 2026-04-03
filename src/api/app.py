@@ -25,6 +25,7 @@ class _StripPrefixMiddleware:
         return self._app(environ, start_response)
 
 from src.api.routes.audio import audio_bp
+from src.api.routes.cadre import cadre_bp
 from src.api.routes.chat import chat_bp
 from src.api.routes.documents import documents_bp
 from src.api.routes.ai_proxy import ai_proxy_bp
@@ -175,6 +176,7 @@ def create_app() -> Flask:
     )
 
     app.register_blueprint(system_bp)
+    app.register_blueprint(cadre_bp)
     app.register_blueprint(files_bp)
     app.register_blueprint(storage_bp)
     app.register_blueprint(chat_bp)
