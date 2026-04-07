@@ -101,7 +101,8 @@ curl -N -X POST http://localhost:8000/v1/chat/completions \
 
 说明：
 - 返回类型为 `text/event-stream`
-- 会先返回阶段进度事件（`intent` / `retrieval` / `generation`），再返回 `delta.content` 文本分片
+- 默认仅返回 OpenAI 标准 `delta.content` 文本分片
+- 如需阶段进度、引用和会话事件，请在请求体中增加 `stream_meta: true`
 
 #### 存储文档API示例
 

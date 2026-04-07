@@ -150,6 +150,7 @@ export async function streamAskWithLlm(
     body: JSON.stringify({
       messages,
       stream: true,
+      stream_meta: true,
       session_id: sessionId,
       ...payload
     }),
@@ -187,6 +188,12 @@ export async function streamAskWithLlm(
       const rawEvent = buffer.slice(0, separatorIndex);
       buffer = buffer.slice(separatorIndex + 2);
 
+      const eventName = rawEvent
+        .split('\n')
+        .find((line) => line.startsWith('event:'))
+        ?.slice(6)
+        .trim();
+
       const dataLines = rawEvent
         .split('\n')
         .filter((line) => line.startsWith('data:'))
@@ -214,15 +221,17 @@ export async function streamAskWithLlm(
         throw new Error(String(payload.error.message));
       }
 
-      if (payload?.event === 'progress') {
+      const payloadEvent = payload?.event || eventName;
+
+      if (payloadEvent === 'progress') {
         onProgress?.(payload as StreamProgressEvent);
       }
 
-      if (payload?.event === 'citations') {
+      if (payloadEvent === 'citations') {
         onCitations?.((payload as StreamCitationsEvent).citations || []);
       }
 
-      if (payload?.event === 'session') {
+      if (payloadEvent === 'session') {
         onSession?.(payload as StreamSessionEvent);
       }
 

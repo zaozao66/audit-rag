@@ -1,5 +1,4 @@
 import logging
-import ssl
 import httpx
 from typing import List
 from abc import ABC, abstractmethod
@@ -29,18 +28,27 @@ class TextEmbeddingProvider(EmbeddingProvider):
     通过OpenAI SDK调用
     """
     
-    def __init__(self, api_key: str, endpoint: str = "https://api.example.com/compatible-mode/v1", model_name: str = "text-embedding-v4", ssl_verify: bool = True, env: str = "development"):
+    def __init__(
+        self,
+        api_key: str,
+        endpoint: str = "https://api.example.com/compatible-mode/v1",
+        model_name: str = "text-embedding-v4",
+        ssl_verify: bool = True,
+        env: str = "development",
+        request_timeout: float = 30.0,
+    ):
         self.api_key = api_key
         self.endpoint = endpoint
         self.model_name = model_name
         self.ssl_verify = ssl_verify
         self.env = env  # 存储环境信息
+        self.request_timeout = float(request_timeout)
         
         # 直接使用提供的endpoint作为base_url
         base_url = endpoint
         
         # 创建HTTP客户端，支持SSL验证控制
-        http_client = httpx.Client(verify=ssl_verify)
+        http_client = httpx.Client(verify=ssl_verify, timeout=self.request_timeout)
         
         self.client = OpenAI(
             api_key=api_key,
@@ -48,7 +56,9 @@ class TextEmbeddingProvider(EmbeddingProvider):
             http_client=http_client
         )
         self.dimension = 1024  # 实际从API返回的维度
-        logger.info(f"Text Embedding提供者初始化完成，模型名称: {self.model_name}, 环境: {self.env}, Base URL: {self.client.base_url}")
+        logger.info(
+            f"Text Embedding提供者初始化完成，模型名称: {self.model_name}, 环境: {self.env}, Base URL: {self.client.base_url}, 超时: {self.request_timeout}s"
+        )
     
     def set_ssl_verify(self, ssl_verify: bool):
         """设置SSL验证状态"""
@@ -61,7 +71,7 @@ class TextEmbeddingProvider(EmbeddingProvider):
                 self.client._client.close()
             
             # 创建新的HTTP客户端
-            http_client = httpx.Client(verify=ssl_verify)
+            http_client = httpx.Client(verify=ssl_verify, timeout=self.request_timeout)
             
             # 直接使用提供的endpoint作为base_url
             base_url = self.endpoint
@@ -119,7 +129,8 @@ class TextEmbeddingProvider(EmbeddingProvider):
                 # 调用API获取嵌入向量
                 response = self.client.embeddings.create(
                     model=self.model_name,
-                    input=batch_texts
+                    input=batch_texts,
+                    timeout=self.request_timeout,
                 )
                 
                 # 记录完整的响应内容

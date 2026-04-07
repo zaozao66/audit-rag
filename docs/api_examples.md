@@ -132,7 +132,8 @@ curl -N -X POST http://localhost:8000/v1/chat/completions \
 说明：
 
 - 返回为 `text/event-stream`
-- 除 `delta.content` 外，还会返回进度事件（如 `intent/retrieval/generation`）
+- 默认仅返回 OpenAI 标准 `delta.content` 分片
+- 如需额外返回进度事件（如 `intent/retrieval/generation`）、引用和会话信息，请在请求体中增加 `stream_meta: true`
 
 ### 5. 清空向量库
 

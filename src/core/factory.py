@@ -26,7 +26,8 @@ class RAGFactory:
             endpoint=embed_config['endpoint'],
             model_name=embed_config['model_name'],
             ssl_verify=embed_config.get('ssl_verify', True),
-            env=env
+            env=env,
+            request_timeout=embed_config.get('request_timeout', 30.0),
         )
 
     @staticmethod

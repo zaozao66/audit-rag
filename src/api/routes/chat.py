@@ -1,7 +1,9 @@
 import json
+import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from src.api.routes.scope_utils import extract_scope_from_request
 from src.api.services.conversation_service import ConversationService
@@ -9,6 +11,14 @@ from src.api.services.rag_service import RAGService
 
 
 chat_bp = Blueprint('chat', __name__)
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    return bool(value)
 
 
 def _format_search_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -36,13 +46,6 @@ def _format_search_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 def _parse_retrieval_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
-    def _to_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
-        return bool(value)
-
     overrides: Dict[str, Any] = {}
     if not isinstance(data, dict):
         return overrides
@@ -85,6 +88,49 @@ def _parse_retrieval_overrides(data: Dict[str, Any]) -> Dict[str, Any]:
             overrides['knowledge_filters'] = normalized
 
     return overrides
+
+
+def _coerce_legacy_type_filter(
+    service: RAGService,
+    scope: str,
+    data: Dict[str, Any],
+    retrieval_overrides: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return retrieval_overrides
+    if retrieval_overrides.get("knowledge_filters"):
+        return retrieval_overrides
+
+    raw_type = data.get("type")
+    if raw_type is None:
+        return retrieval_overrides
+
+    type_value = str(raw_type or "").strip()
+    if not type_value:
+        return retrieval_overrides
+
+    normalized_type = type_value.casefold()
+    for field in service.get_scope_classification_fields(scope):
+        field_key = str(field.get("key", "")).strip()
+        if not field_key:
+            continue
+
+        for option in field.get("options", []) or []:
+            value = str(option.get("value", "")).strip()
+            label = str(option.get("label", "")).strip()
+            candidates = {
+                candidate.casefold()
+                for candidate in (value, label)
+                if candidate
+            }
+            if normalized_type not in candidates:
+                continue
+
+            merged = dict(retrieval_overrides)
+            merged["knowledge_filters"] = {field_key: [value]}
+            return merged
+
+    return retrieval_overrides
 
 
 def _parse_top_k(value: Any, default: int = 5) -> int:
@@ -151,24 +197,26 @@ def _prepare_chat_turn(
     summary = conversation_service.get_summary(final_session_id, scope=scope)
 
     llm_provider = rag_processor.llm_provider
-    standalone_query = llm_provider.rewrite_query(
-        query=query,
-        recent_messages=recent_messages,
-        conversation_summary=summary,
-    )
+    has_assistant_history = any(msg.get("role") == "assistant" for msg in recent_messages)
+    if summary or has_assistant_history:
+        standalone_query = llm_provider.rewrite_query(
+            query=query,
+            recent_messages=recent_messages,
+            conversation_summary=summary,
+        )
+    else:
+        standalone_query = query
 
     last_retrieval = conversation_service.get_last_retrieval(final_session_id, scope=scope)
-    route_info = llm_provider.route_retrieval(
-        query=standalone_query,
-        recent_messages=recent_messages,
-        has_last_contexts=bool(last_retrieval.get("contexts")),
-    )
-    route_decision = route_info.get("decision", "full_retrieval")
-
-    # 显式传入检索参数时，强制走检索。
     if retrieval_overrides:
-        route_decision = "full_retrieval"
-        route_info["reason"] = "检测到显式检索参数，强制执行检索"
+        route_info = {"decision": "full_retrieval", "reason": "检测到显式检索参数，强制执行检索"}
+    else:
+        route_info = llm_provider.route_retrieval(
+            query=standalone_query,
+            recent_messages=recent_messages,
+            has_last_contexts=bool(last_retrieval.get("contexts")),
+        )
+    route_decision = route_info.get("decision", "full_retrieval")
 
     contexts: List[Dict[str, Any]] = []
     citations: List[Dict[str, Any]] = []
@@ -270,16 +318,37 @@ def _finalize_chat_turn(
     return updated_summary
 
 
+def _sse_data(payload: Dict[str, Any], event_name: Optional[str] = None) -> str:
+    lines: List[str] = []
+    if event_name:
+        lines.append(f"event: {event_name}")
+    lines.append(f"data: {json.dumps(payload, ensure_ascii=False)}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _build_completion_identity(model_name: str) -> Dict[str, Any]:
+    return {
+        "id": f"chatcmpl_{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model_name or "unknown",
+    }
+
+
 def _stream_chat_completion(
     service: RAGService,
     conversation_service: ConversationService,
+    logger: Any,
     scope: str,
     messages: List[Dict[str, str]],
     session_id: Optional[str],
     top_k: int,
     retrieval_overrides: Dict[str, Any],
+    emit_meta_events: bool = False,
 ):
     def _progress(stage: str, status: str, message: str, extra: Dict[str, Any] = None):
+        if not emit_meta_events:
+            return ""
         payload = {
             "event": "progress",
             "stage": stage,
@@ -288,10 +357,12 @@ def _stream_chat_completion(
         }
         if extra:
             payload.update(extra)
-        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        return _sse_data(payload, event_name="progress")
 
     try:
-        yield _progress("intent", "running", "请求已接收，准备初始化会话")
+        progress = _progress("intent", "running", "请求已接收，准备初始化会话")
+        if progress:
+            yield progress
 
         turn = _prepare_chat_turn(
             service=service,
@@ -312,8 +383,11 @@ def _stream_chat_completion(
         citations = turn["citations"]
         llm_provider = turn["llm_provider"]
         final_session_id = turn["session_id"]
+        completion_meta = _build_completion_identity(getattr(llm_provider, "model_name", "unknown"))
+        chunk_meta = dict(completion_meta)
+        chunk_meta["object"] = "chat.completion.chunk"
 
-        yield _progress(
+        progress = _progress(
             "intent",
             "done",
             f"改写完成，路由策略: {route_decision}",
@@ -326,11 +400,13 @@ def _stream_chat_completion(
                 "route_reason": route_reason,
             },
         )
+        if progress:
+            yield progress
 
         if route_decision == "no_retrieval":
-            yield _progress("retrieval", "done", "当前问题无需检索，直接生成回答", {"hits": 0})
+            progress = _progress("retrieval", "done", "当前问题无需检索，直接生成回答", {"hits": 0})
         elif route_decision == "reuse_docs":
-            yield _progress("retrieval", "done", f"复用上轮检索结果 {len(contexts)} 条", {"hits": len(contexts)})
+            progress = _progress("retrieval", "done", f"复用上轮检索结果 {len(contexts)} 条", {"hits": len(contexts)})
         else:
             retrieval_mode = params.get("retrieval_mode", "hybrid")
             retrieval_label = {
@@ -338,9 +414,13 @@ def _stream_chat_completion(
                 "graph": "图检索",
                 "hybrid": "混合检索",
             }.get(retrieval_mode, "混合检索")
-            yield _progress("retrieval", "done", f"{retrieval_label}完成，命中 {len(contexts)} 条", {"hits": len(contexts)})
+            progress = _progress("retrieval", "done", f"{retrieval_label}完成，命中 {len(contexts)} 条", {"hits": len(contexts)})
+        if progress:
+            yield progress
 
-        yield _progress("generation", "running", "LLM回答生成中")
+        progress = _progress("generation", "running", "LLM回答生成中")
+        if progress:
+            yield progress
         model_name = "unknown"
         usage: Dict[str, Any] = {}
         answer_chunks: List[str] = []
@@ -356,6 +436,7 @@ def _stream_chat_completion(
                 text = event.get("content", "")
                 answer_chunks.append(text)
                 chunk_data = {
+                    **chunk_meta,
                     "choices": [{
                         "delta": {
                             "content": text
@@ -364,7 +445,7 @@ def _stream_chat_completion(
                         "finish_reason": None,
                     }]
                 }
-                yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+                yield _sse_data(chunk_data)
             elif event.get("type") == "done":
                 model_name = event.get("model", "unknown")
                 usage = event.get("usage", {})
@@ -380,7 +461,7 @@ def _stream_chat_completion(
             previous_summary=turn["summary"],
         )
 
-        yield _progress(
+        progress = _progress(
             "generation",
             "done",
             "回答生成完成",
@@ -391,28 +472,51 @@ def _stream_chat_completion(
                 "standalone_query": standalone_query,
             },
         )
-        yield f"data: {json.dumps({'event': 'citations', 'citations': citations}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'event': 'session', 'session_id': final_session_id, 'summary': updated_summary, 'scope': scope}, ensure_ascii=False)}\n\n"
+        if progress:
+            yield progress
+        if emit_meta_events:
+            yield _sse_data({"event": "citations", "citations": citations}, event_name="citations")
+            yield _sse_data(
+                {
+                    "event": "session",
+                    "session_id": final_session_id,
+                    "summary": updated_summary,
+                    "scope": scope,
+                },
+                event_name="session",
+            )
 
         final_chunk = {
+            **chunk_meta,
             "choices": [{
                 "delta": {},
                 "index": 0,
                 "finish_reason": "stop",
             }]
         }
-        yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+        yield _sse_data(final_chunk)
         yield "data: [DONE]\n\n"
+        logger.info(
+            "OpenAI兼容流式响应完成: scope=%s session_id=%s route=%s retrieval_mode=%s answer_chars=%s",
+            scope,
+            final_session_id,
+            route_decision,
+            params.get("retrieval_mode", "none"),
+            len(final_answer),
+        )
     except Exception as e:
-        current_app.logger.error("流式响应生成失败: %s", e, exc_info=True)
-        yield _progress("generation", "done", "处理失败", {"error": str(e)})
-        error_data = {
-            "error": {
-                "message": str(e),
-                "type": "internal_error",
+        logger.error("流式响应生成失败: %s", e, exc_info=True)
+        progress = _progress("generation", "done", "处理失败", {"error": str(e)})
+        if progress:
+            yield progress
+        if emit_meta_events:
+            error_data = {
+                "error": {
+                    "message": str(e),
+                    "type": "internal_error",
+                }
             }
-        }
-        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+            yield _sse_data(error_data, event_name="error")
 
 
 @chat_bp.route('/search_with_intent', methods=['POST'])
@@ -427,6 +531,7 @@ def search_with_intent():
             return jsonify({"error": "缺少query参数"}), 400
 
         retrieval_overrides = _parse_retrieval_overrides(data)
+        retrieval_overrides = _coerce_legacy_type_filter(service, rag_processor.scope, data, retrieval_overrides)
         if "knowledge_filters" in retrieval_overrides:
             retrieval_overrides["knowledge_filters"] = service.normalize_scope_knowledge_labels(
                 rag_processor.scope,
@@ -468,6 +573,7 @@ def ask_with_llm():
         query = data['query']
         top_k = _parse_top_k(data.get('top_k', 5))
         retrieval_overrides = _parse_retrieval_overrides(data)
+        retrieval_overrides = _coerce_legacy_type_filter(service, rag_processor.scope, data, retrieval_overrides)
         if "knowledge_filters" in retrieval_overrides:
             retrieval_overrides["knowledge_filters"] = service.normalize_scope_knowledge_labels(
                 rag_processor.scope,
@@ -523,10 +629,12 @@ def chat_completions():
         if not user_message:
             return jsonify({"error": "未找到用户消息"}), 400
 
-        stream = data.get('stream', False)
+        stream = _to_bool(data.get('stream', False))
+        stream_meta = _to_bool(data.get('stream_meta', False))
         top_k = _parse_top_k(data.get('top_k', 5))
         session_id = data.get('session_id')
         retrieval_overrides = _parse_retrieval_overrides(data)
+        retrieval_overrides = _coerce_legacy_type_filter(service, resolved_scope, data, retrieval_overrides)
         if "knowledge_filters" in retrieval_overrides:
             retrieval_overrides["knowledge_filters"] = service.normalize_scope_knowledge_labels(
                 resolved_scope,
@@ -545,15 +653,20 @@ def chat_completions():
         )
 
         if stream:
+            stream_logger = current_app.logger
             return Response(
-                _stream_chat_completion(
-                    service=service,
-                    conversation_service=conversation_service,
-                    scope=resolved_scope,
-                    messages=messages,
-                    session_id=session_id,
-                    top_k=top_k,
-                    retrieval_overrides=retrieval_overrides,
+                stream_with_context(
+                    _stream_chat_completion(
+                        service=service,
+                        conversation_service=conversation_service,
+                        logger=stream_logger,
+                        scope=resolved_scope,
+                        messages=messages,
+                        session_id=session_id,
+                        top_k=top_k,
+                        retrieval_overrides=retrieval_overrides,
+                        emit_meta_events=stream_meta,
+                    )
                 ),
                 mimetype='text/event-stream',
                 headers={
@@ -579,6 +692,7 @@ def chat_completions():
             conversation_summary=turn["summary"],
             standalone_query=turn["standalone_query"],
         )
+        completion_meta = _build_completion_identity(llm_result.get('model', 'unknown'))
 
         updated_summary = _finalize_chat_turn(
             conversation_service=conversation_service,
@@ -591,6 +705,7 @@ def chat_completions():
         )
 
         response = {
+            **completion_meta,
             "choices": [{
                 "message": {
                     "role": "assistant",

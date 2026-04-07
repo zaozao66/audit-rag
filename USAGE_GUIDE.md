@@ -339,6 +339,9 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 **流式响应格式（SSE）：**
 
+- 默认返回标准 OpenAI Chat Completions 流式分片，仅包含 `choices[].delta`
+- 如果需要额外的进度/引用/会话事件，可在请求体中传 `stream_meta: true`
+
 ```
 data: {"choices":[{"delta":{"content":"这"},"index":0,"finish_reason":null}]}
 

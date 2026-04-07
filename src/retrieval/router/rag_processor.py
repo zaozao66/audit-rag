@@ -44,6 +44,7 @@ RECTIFICATION_STATUS_LABELS = {
 }
 EVIDENCE_NODE_TYPES = {ontology.ENTITY_CHUNK, ontology.ENTITY_DOCUMENT}
 EMBEDDING_INPUT_MAX_CHARS = 8192
+EMBEDDING_SAFE_CHUNK_MAX_CHARS = 6000
 REGULATION_DOC_TYPES = {"internal_regulation", "external_regulation"}
 ACCOUNTING_STANDARD_ROOT_PATTERN = re.compile(
     r"^(企业会计准则第\s*[一二三四五六七八九十百千万零〇两\d]+\s*号[^\n]{0,120}|企业会计准则应用指南[^\n]{0,120})$"
@@ -609,6 +610,48 @@ class RAGProcessor:
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
         return cleaned, unique_pages
 
+    def _split_oversized_chunk_text(self, text: str, max_chars: int = EMBEDDING_SAFE_CHUNK_MAX_CHARS) -> List[str]:
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return []
+        if len(cleaned) <= max_chars:
+            return [cleaned]
+
+        pieces: List[str] = []
+        remaining = cleaned
+        separators = ["\n\n", "\n", "。", "；", "：", "，", "、", " "]
+
+        while remaining:
+            if len(remaining) <= max_chars:
+                pieces.append(remaining.strip())
+                break
+
+            window = remaining[:max_chars]
+            split_at = -1
+            split_sep = ""
+            min_cutoff = max_chars // 2
+            for sep in separators:
+                pos = window.rfind(sep)
+                if pos >= min_cutoff and pos > split_at:
+                    split_at = pos
+                    split_sep = sep
+
+            if split_at == -1:
+                split_at = max_chars
+                split_sep = ""
+            else:
+                split_at += len(split_sep)
+
+            chunk_text = remaining[:split_at].strip()
+            if not chunk_text:
+                chunk_text = remaining[:max_chars].strip()
+                split_at = max_chars
+
+            pieces.append(chunk_text)
+            remaining = remaining[split_at:].lstrip()
+
+        return [piece for piece in pieces if piece]
+
     def _normalize_chunks(self, chunks: List[Dict[str, Any]], doc_id: str) -> List[Dict[str, Any]]:
         normalized = []
         seen_ids = set()
@@ -619,24 +662,41 @@ class RAGProcessor:
             if not cleaned_text:
                 continue
 
-            chunk["text"] = cleaned_text
-            chunk["doc_id"] = doc_id
-
             chunk_id = chunk.get("chunk_id") or f"{doc_id}_chunk_{idx}"
             chunk_id = str(chunk_id)
-            if chunk_id in seen_ids:
-                chunk_id = f"{chunk_id}_{idx}"
-            seen_ids.add(chunk_id)
-            chunk["chunk_id"] = chunk_id
-            chunk["chunk_index"] = idx
+            split_texts = self._split_oversized_chunk_text(cleaned_text)
+            if len(split_texts) > 1:
+                logger.info(
+                    "检测到超长分块并已自动拆分: filename=%s original_chunk_id=%s split_count=%s",
+                    chunk.get("filename", ""),
+                    chunk_id,
+                    len(split_texts),
+                )
 
-            if page_nos:
-                chunk["page_nos"] = page_nos
-            elif "page_nos" in chunk and not chunk.get("page_nos"):
-                chunk.pop("page_nos", None)
+            for split_idx, split_text in enumerate(split_texts):
+                normalized_chunk = dict(chunk)
+                normalized_chunk["text"] = split_text
+                normalized_chunk["doc_id"] = doc_id
 
-            chunk["char_count"] = len(cleaned_text)
-            normalized.append(chunk)
+                next_chunk_id = chunk_id if len(split_texts) == 1 else f"{chunk_id}_part_{split_idx}"
+                if next_chunk_id in seen_ids:
+                    next_chunk_id = f"{next_chunk_id}_{idx}_{split_idx}"
+                seen_ids.add(next_chunk_id)
+
+                normalized_chunk["chunk_id"] = next_chunk_id
+                normalized_chunk["chunk_index"] = len(normalized)
+                if len(split_texts) > 1:
+                    normalized_chunk["split_from_chunk_id"] = chunk_id
+                    normalized_chunk["split_index"] = split_idx
+                    normalized_chunk["split_count"] = len(split_texts)
+
+                if page_nos:
+                    normalized_chunk["page_nos"] = page_nos
+                elif "page_nos" in normalized_chunk and not normalized_chunk.get("page_nos"):
+                    normalized_chunk.pop("page_nos", None)
+
+                normalized_chunk["char_count"] = len(split_text)
+                normalized.append(normalized_chunk)
 
         return normalized
 
@@ -802,6 +862,7 @@ class RAGProcessor:
                     "existing": existing,
                     "doc": doc,
                     "doc_id": doc_id,
+                    "chunks": chunks,
                     "group_id": group_id,
                     "group_name": group_name,
                     "version_label": version_label,

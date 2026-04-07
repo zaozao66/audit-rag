@@ -398,6 +398,12 @@ class LLMProvider:
         if not recent_messages and not conversation_summary:
             return question
 
+        # 只有用户历史、没有助手回答时，通常不需要做额外改写，
+        # 否则会在首字节前多一次模型请求且容易引入无效关联。
+        has_assistant_history = any(msg.get("role") == "assistant" for msg in recent_messages)
+        if not has_assistant_history and not conversation_summary:
+            return question
+
         prompt = f"""请把用户当前问题改写为“可独立检索”的单句问题。
 要求：
 1) 保留原问题意图，不扩展新事实
@@ -448,6 +454,10 @@ class LLMProvider:
 
         heuristic = self._heuristic_route(question, has_last_contexts=has_last_contexts)
         if heuristic["decision"] != "full_retrieval":
+            return heuristic
+
+        # 新对话且没有可复用上下文时，直接走规则路由，避免在检索前再发一次模型请求。
+        if not recent_messages and not has_last_contexts:
             return heuristic
 
         recent_text = self._build_conversation_text(recent_messages or [])

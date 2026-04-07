@@ -6,6 +6,16 @@ from docx import Document
 import pdfplumber
 import chardet
 
+try:
+    import fitz
+except ImportError:  # pragma: no cover - optional dependency
+    fitz = None
+
+try:
+    from rapidocr_onnxruntime import RapidOCR
+except ImportError:  # pragma: no cover - optional dependency
+    RapidOCR = None
+
 
 # 定义文档类型枚举
 DOCUMENT_TYPES = {
@@ -27,6 +37,9 @@ class DocumentProcessor:
     """
     
     ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE = "enterprise_accounting_standards_compendium"
+    OCR_RENDER_SCALE = 2.0
+    _ocr_engine = None
+    _ocr_engine_initialized = False
 
     @staticmethod
     def detect_file_type(file_path: str) -> str:
@@ -169,12 +182,69 @@ class DocumentProcessor:
                             text_parts.append(page_tag)
             
             full_text = "\n".join(text_parts)
+            if not DocumentProcessor.has_meaningful_text(full_text):
+                ocr_text = DocumentProcessor._load_pdf_with_ocr(file_path)
+                if DocumentProcessor.has_meaningful_text(ocr_text):
+                    logger.info("PDF文本抽取为空，已使用OCR回退: %s", file_path)
+                    full_text = ocr_text
             logger.info(f"PDF文档加载完成，总内容长度: {len(full_text)}")
             return full_text
             
         except Exception as e:
             logger.error(f"加载PDF文档失败: {e}")
             raise
+
+    @classmethod
+    def _get_ocr_engine(cls):
+        if cls._ocr_engine_initialized:
+            return cls._ocr_engine
+
+        cls._ocr_engine_initialized = True
+        if fitz is None or RapidOCR is None:
+            logger.warning("OCR依赖不可用，扫描版PDF将无法自动识别")
+            cls._ocr_engine = None
+            return None
+
+        try:
+            cls._ocr_engine = RapidOCR()
+            logger.info("RapidOCR初始化完成")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RapidOCR初始化失败: %s", exc)
+            cls._ocr_engine = None
+        return cls._ocr_engine
+
+    @classmethod
+    def _load_pdf_with_ocr(cls, file_path: str) -> str:
+        ocr_engine = cls._get_ocr_engine()
+        if ocr_engine is None or fitz is None:
+            return ""
+
+        text_parts: List[str] = []
+        try:
+            with fitz.open(file_path) as pdf:
+                for page_num in range(pdf.page_count):
+                    page_tag = f"[[PAGE:{page_num + 1}]]"
+                    page = pdf.load_page(page_num)
+                    pix = page.get_pixmap(matrix=fitz.Matrix(cls.OCR_RENDER_SCALE, cls.OCR_RENDER_SCALE), alpha=False)
+                    result, _ = ocr_engine(pix.tobytes("png"))
+
+                    lines: List[str] = []
+                    for item in result or []:
+                        if not isinstance(item, (list, tuple)) or len(item) < 2:
+                            continue
+                        text = str(item[1] or "").strip()
+                        if text:
+                            lines.append(text)
+
+                    if lines:
+                        text_parts.append(f"{page_tag}\n" + "\n".join(lines))
+                    else:
+                        text_parts.append(page_tag)
+
+            return "\n".join(text_parts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("OCR识别PDF失败: %s | %s", file_path, exc)
+            return ""
 
     @staticmethod
     def has_meaningful_text(content: str) -> bool:
