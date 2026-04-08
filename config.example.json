@@ -209,7 +209,7 @@
         "max_chars": 1200
       },
       "tts": {
-        "provider": "nucc_tts",
+        "provider": "gateway_tts",
         "model": "qwen3-tts",
         "default_voice": "Uncle_Fu",
         "default_format": "wav",
@@ -221,7 +221,7 @@
         "cache_ttl_hours": 48,
         "cache_max_disk_mb": 2048,
         "providers": {
-          "nucc_tts": {
+          "gateway_tts": {
             "endpoint": "https://ai-llm.nucc.com/v1",
             "api_key": "YOUR_PRODUCTION_API_KEY_HERE",
             "model": "qwen3-tts",

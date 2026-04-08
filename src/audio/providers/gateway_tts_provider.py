@@ -8,8 +8,8 @@ from src.audio.providers.base import BaseTTSProvider, TTSRequest, TTSResult
 from src.audio.providers.qwen_tts_provider import FORMAT_TO_MIME
 
 
-class NUCCTTSProvider(BaseTTSProvider):
-    provider_name = "nucc_tts"
+class GatewayTTSProvider(BaseTTSProvider):
+    provider_name = "gateway_tts"
 
     def __init__(self, config: Dict[str, Any], logger: Optional[logging.Logger] = None):
         self._logger = logger or logging.getLogger(__name__)
@@ -25,9 +25,9 @@ class NUCCTTSProvider(BaseTTSProvider):
 
     def synthesize(self, request: TTSRequest) -> TTSResult:
         if not self.endpoint:
-            raise ValueError("NUCC TTS endpoint 未配置")
+            raise ValueError("Gateway TTS endpoint 未配置")
         if not self.api_key:
-            raise ValueError("NUCC TTS api_key 未配置")
+            raise ValueError("Gateway TTS api_key 未配置")
 
         model = str(request.model or self.default_model).strip() or self.default_model
         voice = str(request.voice or self.default_voice).strip() or self.default_voice
@@ -50,7 +50,7 @@ class NUCCTTSProvider(BaseTTSProvider):
 
         url = self._build_url()
         timeout = request.timeout_sec or self.default_timeout
-        self._logger.info("NUCC TTS 请求URL: %s model=%s voice=%s", url, model, voice)
+        self._logger.info("Gateway TTS 请求URL: %s model=%s voice=%s", url, model, voice)
         response = requests.post(
             url,
             headers=headers,
@@ -59,16 +59,16 @@ class NUCCTTSProvider(BaseTTSProvider):
             verify=self.ssl_verify,
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"NUCC TTS 请求失败({response.status_code}) url={url}: {response.text[:220]}")
+            raise RuntimeError(f"Gateway TTS 请求失败({response.status_code}) url={url}: {response.text[:220]}")
 
         content_type = (response.headers.get("Content-Type") or "").lower()
         if "audio/" not in content_type and "application/octet-stream" not in content_type:
-            raise RuntimeError(f"NUCC TTS 返回非音频内容: {content_type or 'unknown'}")
+            raise RuntimeError(f"Gateway TTS 返回非音频内容: {content_type or 'unknown'}")
 
         audio_format = self._detect_audio_format(content_type, fallback=request.audio_format or "wav")
         audio_bytes = response.content
         if not audio_bytes:
-            raise RuntimeError("NUCC TTS 返回空音频")
+            raise RuntimeError("Gateway TTS 返回空音频")
 
         return TTSResult(
             audio_bytes=audio_bytes,

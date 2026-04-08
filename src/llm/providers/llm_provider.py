@@ -6,6 +6,7 @@ LLM提供者 - 用于生成式回答
 import logging
 import json
 import re
+import time
 import httpx
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
@@ -66,6 +67,71 @@ class LLMProvider:
         logger.info(
             f"LLM提供者初始化完成 - 模型: {model_name}, 端点: {endpoint or 'default'}, SSL验证: {ssl_verify}, 超时: {request_timeout}s"
         )
+
+    def _preview_log_text(self, text: Any, max_chars: int = 240) -> str:
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not normalized:
+            return "(empty)"
+        if len(normalized) <= max_chars:
+            return normalized
+        return f"{normalized[:max_chars]}..."
+
+    def _extract_response_text(self, response: Any) -> str:
+        try:
+            return (response.choices[0].message.content or "").strip()
+        except Exception:
+            return ""
+
+    def _log_chat_completion_success(self, operation: str, started_at: float, response: Any) -> None:
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        response_text = self._extract_response_text(response)
+        usage = getattr(response, "usage", None)
+        if usage:
+            logger.info(
+                "LLM调用完成: operation=%s model=%s elapsed_ms=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s response_preview=%s",
+                operation,
+                self.model_name,
+                elapsed_ms,
+                getattr(usage, "prompt_tokens", 0),
+                getattr(usage, "completion_tokens", 0),
+                getattr(usage, "total_tokens", 0),
+                self._preview_log_text(response_text),
+            )
+            return
+        logger.info(
+            "LLM调用完成: operation=%s model=%s elapsed_ms=%s response_preview=%s",
+            operation,
+            self.model_name,
+            elapsed_ms,
+            self._preview_log_text(response_text),
+        )
+
+    def _log_chat_completion_failure(self, operation: str, started_at: float, api_error: Exception) -> None:
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.error("=" * 60)
+        logger.error("LLM API调用失败详情:")
+        logger.error(f"操作: {operation}")
+        logger.error(f"耗时: {elapsed_ms}ms")
+        logger.error(f"错误类型: {type(api_error).__name__}")
+        logger.error(f"错误信息: {str(api_error)}")
+        logger.error(f"请求端点: {self.endpoint or 'default'}")
+        logger.error(f"模型名称: {self.model_name}")
+        if hasattr(api_error, 'response'):
+            logger.error(f"HTTP状态码: {getattr(api_error.response, 'status_code', 'N/A')}")
+            logger.error(f"响应内容: {getattr(api_error.response, 'text', 'N/A')}")
+        if hasattr(api_error, '__cause__'):
+            logger.error(f"根本原因: {api_error.__cause__}")
+        logger.error("=" * 60)
+
+    def _create_chat_completion(self, operation: str, **kwargs):
+        started_at = time.perf_counter()
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as api_error:
+            self._log_chat_completion_failure(operation, started_at, api_error)
+            raise
+        self._log_chat_completion_success(operation, started_at, response)
+        return response
     
     def generate_answer(
         self,
@@ -124,43 +190,16 @@ class LLMProvider:
             logger.info(f"请求URL: {self.endpoint or 'https://api.openai.com/v1'}")
             logger.info(f"请求参数: model={self.model_name}, temperature={self.temperature}, max_tokens={self.max_tokens}")
             
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    timeout=self.request_timeout
-                )
-            except Exception as api_error:
-                logger.error("=" * 60)
-                logger.error("LLM API调用失败详情:")
-                logger.error(f"错误类型: {type(api_error).__name__}")
-                logger.error(f"错误信息: {str(api_error)}")
-                logger.error(f"请求端点: {self.endpoint or 'default'}")
-                logger.error(f"模型名称: {self.model_name}")
-                
-                # 尝试获取更详细的错误信息
-                if hasattr(api_error, 'response'):
-                    logger.error(f"HTTP状态码: {getattr(api_error.response, 'status_code', 'N/A')}")
-                    logger.error(f"响应内容: {getattr(api_error.response, 'text', 'N/A')}")
-                if hasattr(api_error, '__cause__'):
-                    logger.error(f"根本原因: {api_error.__cause__}")
-                
-                logger.error("=" * 60)
-                raise
+            response = self._create_chat_completion(
+                "generate_answer",
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                timeout=self.request_timeout
+            )
             
             answer = response.choices[0].message.content
-            
-            # 打印响应结果
-            logger.info("=" * 60)
-            logger.info("LLM响应结果:")
-            logger.info(f"\n生成的回答:\n{answer}")
-            logger.info(f"\nToken使用统计:")
-            logger.info(f"  - 输入tokens: {response.usage.prompt_tokens}")
-            logger.info(f"  - 输出tokens: {response.usage.completion_tokens}")
-            logger.info(f"  - 总计tokens: {response.usage.total_tokens}")
-            logger.info("=" * 60)
             
             # 构建返回结果
             result = {
@@ -227,6 +266,7 @@ class LLMProvider:
             logger.info(f"SSL验证: {self.ssl_verify}")
             logger.info("=" * 60)
 
+            request_started_at = time.perf_counter()
             stream = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -237,6 +277,8 @@ class LLMProvider:
             )
 
             completion_tokens = 0
+            collected_chunks: List[str] = []
+            first_chunk_at: Optional[float] = None
             for chunk in stream:
                 choice = chunk.choices[0] if chunk.choices else None
                 if not choice:
@@ -245,11 +287,26 @@ class LLMProvider:
                 delta = getattr(choice, "delta", None)
                 content = getattr(delta, "content", None) if delta else None
                 if content:
+                    if first_chunk_at is None:
+                        first_chunk_at = time.perf_counter()
                     completion_tokens += 1
+                    collected_chunks.append(content)
                     yield {"type": "delta", "content": content}
 
                 if getattr(choice, "finish_reason", None):
                     break
+
+            total_elapsed_ms = int((time.perf_counter() - request_started_at) * 1000)
+            first_chunk_ms = int((first_chunk_at - request_started_at) * 1000) if first_chunk_at else total_elapsed_ms
+            logger.info(
+                "LLM流式调用完成: operation=%s model=%s first_chunk_ms=%s total_elapsed_ms=%s completion_tokens=%s response_preview=%s",
+                "stream_generate_answer",
+                self.model_name,
+                first_chunk_ms,
+                total_elapsed_ms,
+                completion_tokens,
+                self._preview_log_text("".join(collected_chunks)),
+            )
 
             yield {
                 "type": "done",
@@ -307,37 +364,18 @@ class LLMProvider:
             logger.info(f"Prompt:\n{intent_prompt}")
             logger.info("=" * 60)
 
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": "你是一个严格只返回JSON格式的后端助手。"},
-                        {"role": "user", "content": intent_prompt}
-                    ],
-                    temperature=0.1,
-                    timeout=self.request_timeout
-                )
-            except Exception as api_error:
-                logger.error("=" * 60)
-                logger.error("意图识别API调用失败:")
-                logger.error(f"错误类型: {type(api_error).__name__}")
-                logger.error(f"错误信息: {str(api_error)}")
-                logger.error(f"请求端点: {self.endpoint or 'default'}")
-                
-                # 尝试获取更详细的错误信息
-                if hasattr(api_error, 'response'):
-                    logger.error(f"HTTP状态码: {getattr(api_error.response, 'status_code', 'N/A')}")
-                    logger.error(f"响应内容: {getattr(api_error.response, 'text', 'N/A')}")
-                if hasattr(api_error, '__cause__'):
-                    logger.error(f"根本原因: {api_error.__cause__}")
-                
-                logger.error("=" * 60)
-                raise
+            response = self._create_chat_completion(
+                "detect_intent",
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "你是一个严格只返回JSON格式的后端助手。"},
+                    {"role": "user", "content": intent_prompt}
+                ],
+                temperature=0.1,
+                timeout=self.request_timeout
+            )
             
             raw_content = response.choices[0].message.content.strip()
-            logger.info("-" * 60)
-            logger.info(f"意图识别原始响应:\n{raw_content}")
-            logger.info("-" * 60)
 
             content = raw_content
             # 处理可能的Markdown代码块
@@ -370,7 +408,11 @@ class LLMProvider:
             return intent_result
             
         except Exception as e:
-            logger.error(f"意图识别解析失败: {e}. 响应内容: {content if 'content' in locals() else 'None'}")
+            logger.error(
+                "意图识别解析失败: %s. 响应内容预览: %s",
+                e,
+                self._preview_log_text(content if 'content' in locals() else 'None'),
+            )
             return {
                 "intent": "comprehensive_query",
                 "reason": f"解析失败降级: {str(e)}",
@@ -421,7 +463,8 @@ class LLMProvider:
 """
 
         try:
-            response = self.client.chat.completions.create(
+            response = self._create_chat_completion(
+                "rewrite_query",
                 model=self.model_name,
                 messages=[
                     {"role": "system", "content": "你是检索查询改写助手，只输出改写后的问题。"},
@@ -477,7 +520,8 @@ class LLMProvider:
 可复用上轮文档: {has_last_contexts}
 """
         try:
-            response = self.client.chat.completions.create(
+            response = self._create_chat_completion(
+                "route_retrieval",
                 model=self.model_name,
                 messages=[
                     {"role": "system", "content": "你是检索路由助手，只输出JSON。"},
@@ -523,7 +567,8 @@ class LLMProvider:
 {self._build_conversation_text(recent_messages)}
 """
         try:
-            response = self.client.chat.completions.create(
+            response = self._create_chat_completion(
+                "summarize_messages",
                 model=self.model_name,
                 messages=[
                     {"role": "system", "content": "你是对话摘要助手。"},

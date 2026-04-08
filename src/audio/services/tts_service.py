@@ -69,7 +69,7 @@ class TTSService:
         final_model = str(model or self.default_model)
         final_voice = str(voice or self.default_voice)
         final_format = str(audio_format or self.default_format).lower()
-        if self.provider_name in {"nucc", "nucc_tts"}:
+        if self.provider_name in {"gateway", "gateway_tts"}:
             final_format = "wav"
         final_sample_rate = int(sample_rate or self.default_sample_rate)
         final_speed = float(speed or 1.0)

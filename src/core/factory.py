@@ -6,7 +6,7 @@ from src.indexing.vector.vector_store import VectorStore
 from src.audio.providers.base import BaseTTSProvider
 from src.audio.providers.cosyvoice_provider import CosyVoiceProvider
 from src.audio.providers.melo_tts_provider import MeloTTSProvider
-from src.audio.providers.nucc_tts_provider import NUCCTTSProvider
+from src.audio.providers.gateway_tts_provider import GatewayTTSProvider
 from src.audio.providers.qwen_tts_provider import QwenTTSProvider
 from src.retrieval.rerank.rerank_provider import AliyunRerankProvider
 from src.llm.providers.llm_provider import create_llm_provider
@@ -82,8 +82,8 @@ class RAGFactory:
 
         if provider_name == "qwen":
             return QwenTTSProvider(merged_cfg, logger=logger)
-        if provider_name in {"nucc", "nucc_tts"}:
-            return NUCCTTSProvider(merged_cfg, logger=logger)
+        if provider_name in {"gateway", "gateway_tts"}:
+            return GatewayTTSProvider(merged_cfg, logger=logger)
         if provider_name == "cosyvoice":
             return CosyVoiceProvider(merged_cfg, logger=logger)
         if provider_name in {"melotts", "melo"}:
