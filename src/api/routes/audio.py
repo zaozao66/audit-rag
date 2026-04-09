@@ -1,12 +1,15 @@
 import mimetypes
 import os
-from typing import Any, Dict
+import threading
+from typing import Any, Dict, Optional
 
+import httpx
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 
 from src.api.routes.scope_utils import extract_scope_from_request
 from src.audio.services.speech_script_service import SpeechScriptService
 from src.audio.services.tts_service import TTSService
+from src.utils.config_loader import load_config
 
 
 audio_bp = Blueprint("audio", __name__)
@@ -122,8 +125,75 @@ def get_audio_file(file_name: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# ASR 代理（懒加载 httpx 客户端）
+# ---------------------------------------------------------------------------
+
+_asr_lock = threading.Lock()
+_asr_client: Optional[httpx.Client] = None
+_asr_cfg: Optional[Dict] = None
+
+
+def _get_asr_client():
+    global _asr_client, _asr_cfg
+    if _asr_client is not None:
+        return _asr_client, _asr_cfg
+    with _asr_lock:
+        if _asr_client is not None:
+            return _asr_client, _asr_cfg
+        config = load_config()
+        cfg = config.get("asr_proxy", {})
+        ssl_verify = bool(cfg.get("ssl_verify", True))
+        _asr_cfg = cfg
+        _asr_client = httpx.Client(
+            transport=httpx.HTTPTransport(retries=1, verify=ssl_verify),
+            trust_env=False,
+            timeout=float(cfg.get("request_timeout", 60)),
+        )
+    return _asr_client, _asr_cfg
+
+
 @audio_bp.route("/v1/audio/transcriptions", methods=["POST"])
-def transcriptions_placeholder():
-    return jsonify({
-        "error": "STT接口已预留，当前版本暂未启用"
-    }), 501
+def transcriptions_proxy():
+    """将 ASR 请求代理转发到配置的外部 STT 服务。"""
+    try:
+        client, cfg = _get_asr_client()
+    except Exception as exc:
+        current_app.logger.error("ASR客户端初始化失败: %s", exc)
+        return jsonify({"error": f"ASR服务初始化失败: {exc}"}), 500
+
+    endpoint = str(cfg.get("endpoint", "")).rstrip("/")
+    path = str(cfg.get("path", "/audio/transcriptions"))
+    api_key = str(cfg.get("api_key", ""))
+    default_model = str(cfg.get("model_name", "qwen3-asr"))
+
+    if not endpoint:
+        return jsonify({"error": "ASR服务未配置（缺少 asr_proxy.endpoint）"}), 503
+
+    target_url = endpoint + path
+
+    # 重建 multipart 表单，允许前端覆盖 model/language
+    if "file" not in request.files:
+        return jsonify({"error": "缺少音频文件（file 字段）"}), 400
+
+    audio_file = request.files["file"]
+    model = request.form.get("model") or default_model
+    language = request.form.get("language") or "zh"
+
+    files = {"file": (audio_file.filename or "audio.wav", audio_file.stream, audio_file.mimetype or "audio/wav")}
+    data = {"model": model, "language": language}
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        resp = client.post(target_url, files=files, data=data, headers=headers)
+        current_app.logger.info("ASR代理响应: status=%d url=%s", resp.status_code, target_url)
+        return Response(resp.content, status=resp.status_code, content_type=resp.headers.get("content-type", "application/json"))
+    except httpx.TimeoutException:
+        current_app.logger.error("ASR请求超时: %s", target_url)
+        return jsonify({"error": "ASR请求超时"}), 504
+    except Exception as exc:
+        current_app.logger.error("ASR代理失败: %s", exc, exc_info=True)
+        return jsonify({"error": f"ASR请求失败: {exc}"}), 502

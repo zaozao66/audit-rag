@@ -89,12 +89,13 @@ def _get_llm_provider():
         provider = create_llm_provider(llm_cfg)
 
         # 用独立的 httpx 客户端替换默认客户端：
-        #   trust_env=False  → 绕过系统代理（避免 clash/v2ray 在连接复用时 reset）
-        #   retries=1        → stale 连接自动重试一次
+        #   trust_env=False       → 绕过系统代理（避免 clash/v2ray 在连接复用时 reset）
+        #   retries=1             → stale 连接自动重试一次
+        #   verify=False（transport 层）→ 跳过 SSL 验证（生产环境本地 CA 链不完整）
+        #   注意：verify 须在 HTTPTransport 上设置，仅设在 Client 上不会传递给底层连接池
         _http = httpx.Client(
-            transport=httpx.HTTPTransport(retries=1),
+            transport=httpx.HTTPTransport(retries=1, verify=False),
             trust_env=False,
-            verify=provider.ssl_verify,
         )
         provider.client = openai_lib.OpenAI(
             api_key=provider.api_key,
