@@ -1,7 +1,7 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Col, Empty, Layout, List, Row, Space, Spin, Typography } from 'antd';
-import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getDocumentChunks, getDocumentIdByFilename, getDocumentRawUrl } from '../api/rag';
@@ -428,6 +428,7 @@ export function DocumentPdfPreviewPage() {
   }, [data?.filename]);
 
   const rawUrl = useMemo(() => (resolvedDocId ? getDocumentRawUrl(resolvedDocId) : ''), [resolvedDocId]);
+  const hasCatalog = useMemo(() => Array.isArray(data?.catalog) && data.catalog.length > 0, [data?.catalog]);
   const pageNumbers = useMemo(() => {
     if (!pdfDoc?.numPages) return [];
     return Array.from({ length: pdfDoc.numPages }, (_, idx) => idx + 1);
@@ -586,37 +587,39 @@ export function DocumentPdfPreviewPage() {
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未加载到文档数据" />
             ) : (
               <Row gutter={12}>
-                <Col xs={24} lg={7}>
-                  <div className="catalog-scroll">
-                    <List
-                      size="small"
-                      dataSource={data.catalog ?? []}
-                      renderItem={(catalog) => (
-                        <List.Item
-                          className={`catalog-item ${activeCatalogId === catalog.id ? 'active' : ''}`}
-                          onClick={() => jumpByCatalog(catalog.id, catalog.title, catalog.page_no)}
-                          style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
-                        >
-                          <div className="catalog-row">
-                            <div
-                              className="catalog-main-text"
-                              title={[getCatalogDisplayTitle(catalog.title, catalog.display_title), getCatalogInlinePreview(catalog.preview_text)].filter(Boolean).join(' · ')}
-                            >
-                              <span className="catalog-title-text">{getCatalogDisplayTitle(catalog.title, catalog.display_title)}</span>
-                              {getCatalogInlinePreview(catalog.preview_text) ? (
-                                <span className="catalog-inline-preview"> · {getCatalogInlinePreview(catalog.preview_text)}</span>
-                              ) : null}
+                {hasCatalog ? (
+                  <Col xs={24} lg={7}>
+                    <div className="catalog-scroll">
+                      <List
+                        size="small"
+                        dataSource={data.catalog ?? []}
+                        renderItem={(catalog) => (
+                          <List.Item
+                            className={`catalog-item ${activeCatalogId === catalog.id ? 'active' : ''}`}
+                            onClick={() => jumpByCatalog(catalog.id, catalog.title, catalog.page_no)}
+                            style={{ paddingLeft: `${Math.max(0, catalog.level - 1) * 14 + 8}px` }}
+                          >
+                            <div className="catalog-row">
+                              <div
+                                className="catalog-main-text"
+                                title={[getCatalogDisplayTitle(catalog.title, catalog.display_title), getCatalogInlinePreview(catalog.preview_text)].filter(Boolean).join(' · ')}
+                              >
+                                <span className="catalog-title-text">{getCatalogDisplayTitle(catalog.title, catalog.display_title)}</span>
+                                {getCatalogInlinePreview(catalog.preview_text) ? (
+                                  <span className="catalog-inline-preview"> · {getCatalogInlinePreview(catalog.preview_text)}</span>
+                                ) : null}
+                              </div>
+                              <Typography.Text type="secondary" className="catalog-line-no">
+                                {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
+                              </Typography.Text>
                             </div>
-                            <Typography.Text type="secondary" className="catalog-line-no">
-                              {typeof catalog.page_no === 'number' ? `P${catalog.page_no}` : `L${catalog.line_no}`}
-                            </Typography.Text>
-                          </div>
-                        </List.Item>
-                      )}
-                    />
-                  </div>
-                </Col>
-                <Col xs={24} lg={17}>
+                          </List.Item>
+                        )}
+                      />
+                    </div>
+                  </Col>
+                ) : null}
+                <Col xs={24} lg={hasCatalog ? 17 : 24}>
                   {!isPdf ? (
                     <Alert
                       type="info"

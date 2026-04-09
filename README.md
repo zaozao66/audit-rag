@@ -13,6 +13,7 @@
 - **重排序增强**：集成rerank模型提升相关性
 - **GraphRAG 混合检索**：支持 `vector / graph / hybrid` 三种检索模式，可做多跳关联召回
 - **LLM智能问答**：基于意图识别和检索结果生成精准回答
+- **语音播报**：支持播报文案生成、TTS 合成、音频缓存与文件回放
 - **持久化向量库**：支持增量上传与自动加载
 - **HTTP API接口**：提供 RESTful API，支持流式问答与文档管理
 
@@ -66,6 +67,9 @@ API端点：
 - `POST /search_with_intent` - 意图识别搜索
 - `POST /ask` - 非流式LLM问答
 - `POST /v1/chat/completions` - OpenAI兼容问答（支持流式SSE）
+- `POST /v1/speech/scripts` - 生成播报文案
+- `POST /v1/audio/speech` - 合成语音（返回音频URL或直接流式返回音频）
+- `GET  /v1/audio/files/<file_name>` - 获取缓存音频文件
 - `POST /clear` - 清空向量库
 - `POST /graph/rebuild` - 重建 GraphRAG 图索引
 - `GET  /info` - 系统信息
@@ -75,6 +79,10 @@ API端点：
 - `DELETE /documents/<doc_id>` - 删除文档
 - `GET  /documents/<doc_id>/chunks` - 文档分块详情
 - `GET  /documents/stats` - 文档统计
+
+批量导库脚本：
+
+- `python3 tools/batch_import_archives.py ...` - 按目录分批打包 ZIP 并调用 `/upload_archive_store`
 
 多知识域隔离（审计/纪检）：
 
@@ -103,6 +111,41 @@ curl -N -X POST http://localhost:8000/v1/chat/completions \
 - 返回类型为 `text/event-stream`
 - 默认仅返回 OpenAI 标准 `delta.content` 文本分片
 - 如需阶段进度、引用和会话事件，请在请求体中增加 `stream_meta: true`
+
+#### 语音播报 API 示例
+
+先生成适合播报的文案：
+
+```bash
+curl -X POST http://localhost:8000/v1/speech/scripts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "请总结本次回答的重点内容",
+    "style": "brief"
+  }'
+```
+
+再进行语音合成：
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -H "X-Knowledge-Scope: discipline" \
+  -d '{
+    "input": "你好，欢迎使用 AI 赋能大监督工作平台",
+    "model": "qwen3-tts",
+    "voice": "Uncle_Fu",
+    "task_type": "VoiceDesign",
+    "language": "Chinese",
+    "instructions": "用播音员的语气",
+    "response_mode": "url"
+  }'
+```
+
+说明：
+- 默认返回 JSON，包含 `audio_url`，前端可直接播放
+- 当 `response_mode = "stream"` 时，接口直接返回音频二进制流
+- 当前生产环境推荐使用 `audio.tts.provider = "gateway_tts"` 统一接入网关式 TTS 服务
 
 #### 存储文档API示例
 
@@ -172,6 +215,7 @@ audit-rag/
 │   │   ├── factory.py      # 组件创建工厂
 │   │   ├── interfaces.py   # 接口契约定义
 │   │   └── schemas.py      # 数据模型定义
+│   ├── audio/              # 音频层：播报文案生成、TTS Provider 与缓存管理
 │   ├── ingestion/          # 解析层：文档解析与分块
 │   │   ├── parsers/        # 文档格式解析 (支持 PDF 表格逻辑聚合)
 │   │   └── splitters/      # 智能分块策略 (制度模式、审计报告模式、台账模式)
@@ -195,4 +239,5 @@ audit-rag/
 - **嵌入模型**：厂商中立设计，支持 text-embedding-v4、BGE 等多种 Embedding 模型
 - **向量存储**：基于 Faiss 的高效向量检索，支持元数据过滤与持久化
 - **检索增强**：集成意图路由 (Intent Routing)、GraphRAG 多跳扩展与多级重排序 (Rerank) 机制
+- **音频能力**：支持播报文案生成、`gateway_tts`/`qwen`/`cosyvoice`/`melotts` 等 TTS Provider 统一封装与音频缓存回放
 - **接口规范**：提供 RESTful 标准接口，并兼容 OpenAI Chat Completions 协议（支持流式响应）

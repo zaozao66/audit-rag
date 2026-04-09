@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { HashRouter } from 'react-router-dom';
+import './polyfills/promiseWithResolvers';
 import App from './App';
 import './styles.css';
 

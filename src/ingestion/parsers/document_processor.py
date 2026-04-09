@@ -38,6 +38,8 @@ class DocumentProcessor:
     
     ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE = "enterprise_accounting_standards_compendium"
     OCR_RENDER_SCALE = 2.0
+    PDF_GARBLED_CID_THRESHOLD = 5
+    PDF_GARBLED_INVALID_RATIO = 0.35
     _ocr_engine = None
     _ocr_engine_initialized = False
 
@@ -182,10 +184,29 @@ class DocumentProcessor:
                             text_parts.append(page_tag)
             
             full_text = "\n".join(text_parts)
-            if not DocumentProcessor.has_meaningful_text(full_text):
+            quality = DocumentProcessor._assess_pdf_text_quality(full_text)
+
+            if quality["fallback_to_fitz"]:
+                fitz_text = DocumentProcessor._load_pdf_with_fitz_text(file_path, ingest_profile=ingest_profile)
+                fitz_quality = DocumentProcessor._assess_pdf_text_quality(fitz_text)
+                if fitz_quality["is_usable"]:
+                    logger.info(
+                        "pdfplumber文本质量较差，已切换PyMuPDF文本提取: %s | reasons=%s",
+                        file_path,
+                        ",".join(quality["reasons"]),
+                    )
+                    full_text = fitz_text
+                    quality = fitz_quality
+
+            if quality["fallback_to_ocr"]:
                 ocr_text = DocumentProcessor._load_pdf_with_ocr(file_path)
-                if DocumentProcessor.has_meaningful_text(ocr_text):
-                    logger.info("PDF文本抽取为空，已使用OCR回退: %s", file_path)
+                ocr_quality = DocumentProcessor._assess_pdf_text_quality(ocr_text)
+                if ocr_quality["is_usable"]:
+                    logger.info(
+                        "PDF文本质量较差，已使用OCR回退: %s | reasons=%s",
+                        file_path,
+                        ",".join(quality["reasons"]),
+                    )
                     full_text = ocr_text
             logger.info(f"PDF文档加载完成，总内容长度: {len(full_text)}")
             return full_text
@@ -247,12 +268,104 @@ class DocumentProcessor:
             return ""
 
     @staticmethod
+    def _load_pdf_with_fitz_text(file_path: str, ingest_profile: Optional[str] = None) -> str:
+        if fitz is None:
+            return ""
+
+        normal_mode_pages: List[List[str]] = []
+        try:
+            with fitz.open(file_path) as pdf:
+                for page_num in range(pdf.page_count):
+                    page = pdf.load_page(page_num)
+                    page_text = page.get_text("text")
+                    if page_text:
+                        lines = DocumentProcessor._normalize_pdf_lines(page_text.splitlines())
+                        normal_mode_pages.append(lines)
+                    else:
+                        normal_mode_pages.append([])
+
+            if ingest_profile == DocumentProcessor.ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE:
+                normal_mode_pages = DocumentProcessor._strip_leading_toc_pages_for_profile(normal_mode_pages)
+
+            repeated_header_footer = DocumentProcessor._detect_repeated_header_footer_lines(normal_mode_pages)
+            text_parts: List[str] = []
+            for page_num, lines in enumerate(normal_mode_pages):
+                page_tag = f"[[PAGE:{page_num + 1}]]"
+                cleaned_lines = DocumentProcessor._clean_pdf_page_lines(lines, repeated_header_footer)
+                if cleaned_lines:
+                    text_parts.append(f"{page_tag}\n" + "\n".join(cleaned_lines))
+                else:
+                    text_parts.append(page_tag)
+            return "\n".join(text_parts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PyMuPDF文本提取失败: %s | %s", file_path, exc)
+            return ""
+
+    @staticmethod
     def has_meaningful_text(content: str) -> bool:
         cleaned = re.sub(r"\[\[PAGE:\d+\]\]", " ", str(content or ""))
         cleaned = re.sub(r"\s+", "", cleaned)
         if not cleaned:
             return False
         return any(ch.isalnum() for ch in cleaned)
+
+    @staticmethod
+    def _assess_pdf_text_quality(content: str) -> Dict[str, Any]:
+        cleaned = re.sub(r"\[\[PAGE:\d+\]\]", "\n", str(content or ""))
+        non_ws = re.sub(r"\s+", "", cleaned)
+        if not non_ws:
+            return {
+                "is_usable": False,
+                "fallback_to_fitz": True,
+                "fallback_to_ocr": True,
+                "reasons": ["empty_text"],
+            }
+
+        cid_count = len(re.findall(r"\(cid:\d+\)", cleaned))
+        chinese_count = len(re.findall(r"[\u4e00-\u9fff]", cleaned))
+        structure_hits = sum(
+            1
+            for pattern in [
+                r"^第[一二三四五六七八九十百千万零〇两\d]+章",
+                r"^第[一二三四五六七八九十百千万零〇两\d]+条",
+                r"^[\d一二三四五六七八九十百千万零〇两]+、",
+                r"^\d+\s+\S+",
+                r"^\d+\.\d+",
+                r"^附\s*录\s*[A-ZＡ-Ｚ]",
+            ]
+            if re.search(pattern, cleaned, flags=re.MULTILINE)
+        )
+        valid_count = sum(1 for ch in cleaned if DocumentProcessor._is_reasonable_pdf_char(ch))
+        invalid_ratio = 1.0 - (valid_count / max(len(cleaned), 1))
+
+        reasons: List[str] = []
+        if cid_count >= DocumentProcessor.PDF_GARBLED_CID_THRESHOLD:
+            reasons.append("cid_garbled")
+        if len(non_ws) >= 200 and invalid_ratio >= DocumentProcessor.PDF_GARBLED_INVALID_RATIO and structure_hits == 0:
+            reasons.append("invalid_ratio_high")
+        if len(non_ws) >= 200 and chinese_count == 0 and structure_hits == 0:
+            reasons.append("no_structure_text")
+
+        low_quality = bool(reasons)
+        return {
+            "is_usable": not low_quality,
+            "fallback_to_fitz": low_quality,
+            "fallback_to_ocr": low_quality,
+            "reasons": reasons,
+            "cid_count": cid_count,
+            "invalid_ratio": invalid_ratio,
+            "structure_hits": structure_hits,
+        }
+
+    @staticmethod
+    def _is_reasonable_pdf_char(ch: str) -> bool:
+        if ch.isspace():
+            return True
+        if ch.isalnum():
+            return True
+        if re.match(r"[\u4e00-\u9fff]", ch):
+            return True
+        return ch in "，。！？；：、,.!?;:'\"（）()【】[]《》〈〉「」『』—…·-_/\\+*=<>%&@#"
 
     @staticmethod
     def _normalize_pdf_lines(lines: List[str]) -> List[str]:
