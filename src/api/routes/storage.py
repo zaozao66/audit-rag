@@ -15,8 +15,10 @@ from src.ingestion.parsers.archive_processor import (
 from src.ingestion.parsers.document_processor import process_uploaded_documents
 from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
+from src.ingestion.splitters.case_material_chunker import CaseMaterialChunker
 from src.ingestion.splitters.document_chunker import DocumentChunker
 from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
+from src.ingestion.splitters.speech_material_chunker import SpeechMaterialChunker
 from src.ingestion.splitters.technical_standard_chunker import TechnicalStandardChunker
 from src.ingestion.splitters.smart_chunker import SmartChunker
 
@@ -63,6 +65,10 @@ def _normalize_chunker_type(value: str) -> str:
         return 'regulation'
     if chunker_type in {'technical', 'tech_standard', 'standard'}:
         return 'technical_standard'
+    if chunker_type in {'speech', 'speech_report', 'important_speech'}:
+        return 'speech_material'
+    if chunker_type in {'case', 'case_report', 'case_library'}:
+        return 'case_material'
     if chunker_type == 'audit':
         return 'audit_report'
     if chunker_type == 'issue':
@@ -83,6 +89,21 @@ def _get_scoped_processor(service: RAGService, chunker_type: str = None, json_da
 def _is_regulation_doc_type(doc_type: str) -> bool:
     normalized = str(doc_type or "").strip().lower()
     return normalized in {"internal_regulation", "external_regulation"}
+
+
+def _resolve_upload_doc_type(scope: str, knowledge_labels: Dict[str, List[str]], requested_doc_type: str = None) -> str:
+    if str(scope or "").strip().lower() != "discipline":
+        return str(requested_doc_type or "internal_regulation").strip() or "internal_regulation"
+
+    library_values = knowledge_labels.get("library") or []
+    library = str(library_values[0] if library_values else "").strip()
+    library_doc_type_map = {
+        "important_speeches": "internal_report",
+        "case_library": "internal_report",
+        "national_laws": "internal_regulation",
+        "party_regulations": "internal_regulation",
+    }
+    return library_doc_type_map.get(library, "internal_regulation")
 
 
 def _infer_catalog_level(semantic_boundary: str, header: str, section_path: List[str]) -> int:
@@ -543,7 +564,11 @@ def upload_and_store_documents():
                     )
                     file_id_by_temp_path[temp_file.name] = stored.file_id
 
-            doc_type = request.form.get('doc_type', 'internal_regulation')
+            doc_type = _resolve_upload_doc_type(
+                rag_processor.scope,
+                knowledge_labels,
+                request.form.get('doc_type'),
+            )
             enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
             regulation_group_id = str(request.form.get('regulation_group_id', '') or '').strip()
             regulation_group_name = str(request.form.get('regulation_group_name', '') or '').strip()
@@ -651,7 +676,11 @@ def upload_archive_and_store_documents():
             require_required_fields=True,
         )
 
-        doc_type = request.form.get('doc_type', 'internal_regulation')
+        doc_type = _resolve_upload_doc_type(
+            rag_processor.scope,
+            knowledge_labels,
+            request.form.get('doc_type'),
+        )
         enable_regulation_group = _to_bool(request.form.get('enable_regulation_group', 'false'), default=False)
         regulation_group_id = str(request.form.get('regulation_group_id', '') or '').strip()
         regulation_group_name = str(request.form.get('regulation_group_name', '') or '').strip()
@@ -789,6 +818,10 @@ def test_chunking():
                 doc_type = 'internal_regulation'
             elif chunker_type == 'technical_standard':
                 doc_type = 'internal_regulation'
+            elif chunker_type == 'speech_material':
+                doc_type = 'internal_report'
+            elif chunker_type == 'case_material':
+                doc_type = 'internal_report'
             elif chunker_type == 'audit_report':
                 doc_type = 'internal_report'
             elif chunker_type == 'audit_issue':
@@ -812,6 +845,10 @@ def test_chunking():
             chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type == 'technical_standard':
             chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == 'speech_material':
+            chunker = SpeechMaterialChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == 'case_material':
+            chunker = CaseMaterialChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type in ('audit_report', 'audit'):
             chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type in ('audit_issue', 'issue'):
@@ -860,6 +897,10 @@ def test_chunking_upload():
                 doc_type = 'internal_regulation'
             elif chunker_type == 'technical_standard':
                 doc_type = 'internal_regulation'
+            elif chunker_type == 'speech_material':
+                doc_type = 'internal_report'
+            elif chunker_type == 'case_material':
+                doc_type = 'internal_report'
             elif chunker_type == 'audit_report':
                 doc_type = 'internal_report'
             elif chunker_type == 'audit_issue':
@@ -895,6 +936,10 @@ def test_chunking_upload():
                 chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
             elif chunker_type == 'technical_standard':
                 chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
+            elif chunker_type == 'speech_material':
+                chunker = SpeechMaterialChunker(chunk_size=chunk_size, overlap=overlap)
+            elif chunker_type == 'case_material':
+                chunker = CaseMaterialChunker(chunk_size=chunk_size, overlap=overlap)
             elif chunker_type in ('audit_report', 'audit'):
                 chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
             elif chunker_type in ('audit_issue', 'issue'):

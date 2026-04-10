@@ -50,7 +50,9 @@ export function UploadPanel({ scope, classificationFields, onUploaded }: UploadP
 
   const files = fileList.map((f) => f.originFileObj).filter(Boolean) as File[];
   const archiveFile = archiveList[0]?.originFileObj as File | undefined;
-  const isRegulationDocType = docType === 'internal_regulation' || docType === 'external_regulation';
+  const isDisciplineScope = scope === 'discipline';
+  const effectiveDocType = isDisciplineScope ? undefined : docType;
+  const isRegulationDocType = !isDisciplineScope && (docType === 'internal_regulation' || docType === 'external_regulation');
 
   useEffect(() => {
     if (!isRegulationDocType) {
@@ -128,8 +130,8 @@ export function UploadPanel({ scope, classificationFields, onUploaded }: UploadP
           }
         : undefined;
       const data = uploadMode === 'files'
-        ? await uploadFiles({ files, chunkerType, docType, title, searchable, regulationGroup, knowledgeLabels })
-        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType, title, searchable, regulationGroup, knowledgeLabels });
+        ? await uploadFiles({ files, chunkerType, docType: effectiveDocType, title, searchable, regulationGroup, knowledgeLabels })
+        : await uploadArchive({ archive: archiveFile as File, chunkerType, docType: effectiveDocType, title, searchable, regulationGroup, knowledgeLabels });
       setResult(data);
       onUploaded();
     } catch (err) {
@@ -193,21 +195,25 @@ export function UploadPanel({ scope, classificationFields, onUploaded }: UploadP
               { value: 'smart', label: 'smart' },
               { value: 'regulation', label: 'regulation' },
               { value: 'technical_standard', label: 'technical_standard' },
+              { value: 'speech_material', label: 'speech_material' },
+              { value: 'case_material', label: 'case_material' },
               { value: 'audit_report', label: 'audit_report' },
               { value: 'audit_issue', label: 'audit_issue' },
               { value: 'default', label: 'default' }
             ]} />
           </Form.Item>
 
-          <Form.Item label="文档类型">
-            <Select value={docType} onChange={setDocType} options={[
-              { value: 'internal_regulation', label: 'internal_regulation' },
-              { value: 'external_regulation', label: 'external_regulation' },
-              { value: 'internal_report', label: 'internal_report' },
-              { value: 'external_report', label: 'external_report' },
-              { value: 'audit_issue', label: 'audit_issue' }
-            ]} />
-          </Form.Item>
+          {!isDisciplineScope ? (
+            <Form.Item label="文档类型">
+              <Select value={docType} onChange={setDocType} options={[
+                { value: 'internal_regulation', label: 'internal_regulation' },
+                { value: 'external_regulation', label: 'external_regulation' },
+                { value: 'internal_report', label: 'internal_report' },
+                { value: 'external_report', label: 'external_report' },
+                { value: 'audit_issue', label: 'audit_issue' }
+              ]} />
+            </Form.Item>
+          ) : null}
         </div>
 
         <Form.Item label="标题（可选）">
@@ -253,22 +259,24 @@ export function UploadPanel({ scope, classificationFields, onUploaded }: UploadP
           </Space>
         </Form.Item>
 
-        <Form.Item label="制度版本管理">
-          <Space direction="vertical" style={{ width: '100%' }} size={8}>
-            <Radio.Group
-              value={enableRegulationGroup ? 'versioned' : 'normal'}
-              onChange={(event) => setEnableRegulationGroup(event.target.value === 'versioned')}
-              disabled={!isRegulationDocType}
-              options={[
-                { label: '普通上传（不进入版本组）', value: 'normal' },
-                { label: '同一制度版本上传', value: 'versioned' }
-              ]}
-            />
-            {!isRegulationDocType ? (
-              <Typography.Text type="secondary">仅 internal_regulation / external_regulation 支持版本分组</Typography.Text>
-            ) : null}
-          </Space>
-        </Form.Item>
+        {!isDisciplineScope ? (
+          <Form.Item label="制度版本管理">
+            <Space direction="vertical" style={{ width: '100%' }} size={8}>
+              <Radio.Group
+                value={enableRegulationGroup ? 'versioned' : 'normal'}
+                onChange={(event) => setEnableRegulationGroup(event.target.value === 'versioned')}
+                disabled={!isRegulationDocType}
+                options={[
+                  { label: '普通上传（不进入版本组）', value: 'normal' },
+                  { label: '同一制度版本上传', value: 'versioned' }
+                ]}
+              />
+              {!isRegulationDocType ? (
+                <Typography.Text type="secondary">仅 internal_regulation / external_regulation 支持版本分组</Typography.Text>
+              ) : null}
+            </Space>
+          </Form.Item>
+        ) : null}
 
         {enableRegulationGroup && isRegulationDocType ? (
           <>

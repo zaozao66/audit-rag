@@ -3,6 +3,8 @@ from typing import List, Dict, Any
 from src.ingestion.splitters.document_chunker import DocumentChunker
 from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
 from src.ingestion.splitters.technical_standard_chunker import TechnicalStandardChunker
+from src.ingestion.splitters.speech_material_chunker import SpeechMaterialChunker
+from src.ingestion.splitters.case_material_chunker import CaseMaterialChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
 from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 
@@ -25,6 +27,8 @@ class SmartChunker:
         # 初始化各种分块器
         self.law_chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
         self.technical_chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
+        self.speech_chunker = SpeechMaterialChunker(chunk_size=chunk_size, overlap=overlap)
+        self.case_chunker = CaseMaterialChunker(chunk_size=chunk_size, overlap=overlap)
         self.audit_chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
         self.issue_chunker = AuditIssueChunker(chunk_size=chunk_size, overlap=overlap)
         self.default_chunker = DocumentChunker(chunk_size=chunk_size, overlap=overlap)
@@ -45,11 +49,19 @@ class SmartChunker:
 
             is_regulation_doc_type = doc_type in ['internal_regulation', 'external_regulation']
             is_technical_standard = self.technical_chunker._is_technical_standard(doc)
+            is_speech_material = self.speech_chunker._is_speech_material(doc)
+            is_case_material = self.case_chunker._is_case_material(doc)
 
             # 根据文档类型选择分块器
             if doc_type == 'audit_issue' or self.issue_chunker._is_audit_issue(doc):
                 logger.info(f"文档 {filename} 使用审计问题分块器")
                 chunks = self.issue_chunker.chunk_audit_issues(doc)
+            elif is_case_material:
+                logger.info(f"文档 {filename} 使用典型案例分块器")
+                chunks = self.case_chunker.chunk_case_material(doc)
+            elif is_speech_material:
+                logger.info(f"文档 {filename} 使用讲话材料分块器")
+                chunks = self.speech_chunker.chunk_speech_material(doc)
             elif is_regulation_doc_type:
                 if is_technical_standard:
                     logger.info(f"文档 {filename} 使用技术规范分块器")

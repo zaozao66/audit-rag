@@ -1,4 +1,4 @@
-export type ChunkerType = 'smart' | 'regulation' | 'technical_standard' | 'audit_report' | 'audit_issue' | 'default';
+export type ChunkerType = 'smart' | 'regulation' | 'technical_standard' | 'speech_material' | 'case_material' | 'audit_report' | 'audit_issue' | 'default';
 
 export interface ApiError {
   error: string;

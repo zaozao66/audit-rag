@@ -66,6 +66,7 @@ export function DocumentsPanel({
   const [historyVisible, setHistoryVisible] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyVersions, setHistoryVersions] = useState<DocumentRecord[]>([]);
+  const isDisciplineScope = scope === 'discipline';
 
   const selected = useMemo(() => documents.find((item) => item.doc_id === selectedId) ?? null, [documents, selectedId]);
 
@@ -170,12 +171,14 @@ export function DocumentsPanel({
       <Card size="small" className="app-sub-card docs-filter-card">
         <Space wrap size={[12, 8]}>
           <Typography.Text type="secondary">筛选</Typography.Text>
-          <Select
-            value={docType}
-            style={{ width: 220 }}
-            onChange={(value: string) => onFilterChange({ docType: value, keyword, knowledgeFilters })}
-            options={[{ value: '', label: '全部类型' }, ...docTypeOptions.map((type) => ({ value: type, label: type }))]}
-          />
+          {!isDisciplineScope ? (
+            <Select
+              value={docType}
+              style={{ width: 220 }}
+              onChange={(value: string) => onFilterChange({ docType: value, keyword, knowledgeFilters })}
+              options={[{ value: '', label: '全部类型' }, ...docTypeOptions.map((type) => ({ value: type, label: type }))]}
+            />
+          ) : null}
           {classificationFields.map((field) => (
             <Select
               key={field.key}
@@ -186,7 +189,7 @@ export function DocumentsPanel({
               onChange={(value) => {
                 const nextValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
                 onFilterChange({
-                  docType,
+                  docType: isDisciplineScope ? '' : docType,
                   keyword,
                   knowledgeFilters: {
                     ...knowledgeFilters,
@@ -203,7 +206,7 @@ export function DocumentsPanel({
             allowClear
             style={{ width: 260 }}
             onChange={(e: ChangeEvent<HTMLInputElement>) => onFilterChange({
-              docType,
+              docType: isDisciplineScope ? '' : docType,
               keyword: e.target.value,
               knowledgeFilters,
             })}
@@ -243,7 +246,7 @@ export function DocumentsPanel({
                       title={doc.filename || doc.doc_id}
                       description={(
                         <Space size={8} wrap>
-                          <Tag>{doc.doc_type}</Tag>
+                          {!isDisciplineScope ? <Tag>{doc.doc_type}</Tag> : null}
                           <Typography.Text type="secondary">{doc.chunk_count} chunks</Typography.Text>
                           <Tag color={doc.searchable ? 'processing' : 'gold'}>
                             {doc.searchable ? '可检索' : '仅预览'}

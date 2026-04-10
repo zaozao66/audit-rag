@@ -40,6 +40,7 @@ class DocumentProcessor:
     OCR_RENDER_SCALE = 2.0
     PDF_GARBLED_CID_THRESHOLD = 5
     PDF_GARBLED_INVALID_RATIO = 0.35
+    PDF_GARBLED_EXTENDED_LATIN_RATIO = 0.25
     _ocr_engine = None
     _ocr_engine_initialized = False
 
@@ -199,7 +200,7 @@ class DocumentProcessor:
                     quality = fitz_quality
 
             if quality["fallback_to_ocr"]:
-                ocr_text = DocumentProcessor._load_pdf_with_ocr(file_path)
+                ocr_text = DocumentProcessor._load_pdf_with_ocr(file_path, ingest_profile=ingest_profile)
                 ocr_quality = DocumentProcessor._assess_pdf_text_quality(ocr_text)
                 if ocr_quality["is_usable"]:
                     logger.info(
@@ -235,16 +236,15 @@ class DocumentProcessor:
         return cls._ocr_engine
 
     @classmethod
-    def _load_pdf_with_ocr(cls, file_path: str) -> str:
+    def _load_pdf_with_ocr(cls, file_path: str, ingest_profile: Optional[str] = None) -> str:
         ocr_engine = cls._get_ocr_engine()
         if ocr_engine is None or fitz is None:
             return ""
 
-        text_parts: List[str] = []
+        normal_mode_pages: List[List[str]] = []
         try:
             with fitz.open(file_path) as pdf:
                 for page_num in range(pdf.page_count):
-                    page_tag = f"[[PAGE:{page_num + 1}]]"
                     page = pdf.load_page(page_num)
                     pix = page.get_pixmap(matrix=fitz.Matrix(cls.OCR_RENDER_SCALE, cls.OCR_RENDER_SCALE), alpha=False)
                     result, _ = ocr_engine(pix.tobytes("png"))
@@ -257,11 +257,20 @@ class DocumentProcessor:
                         if text:
                             lines.append(text)
 
-                    if lines:
-                        text_parts.append(f"{page_tag}\n" + "\n".join(lines))
-                    else:
-                        text_parts.append(page_tag)
+                    normal_mode_pages.append(DocumentProcessor._normalize_pdf_lines(lines))
 
+            if ingest_profile == DocumentProcessor.ENTERPRISE_ACCOUNTING_STANDARDS_PROFILE:
+                normal_mode_pages = DocumentProcessor._strip_leading_toc_pages_for_profile(normal_mode_pages)
+
+            repeated_header_footer = DocumentProcessor._detect_repeated_header_footer_lines(normal_mode_pages)
+            text_parts: List[str] = []
+            for page_num, lines in enumerate(normal_mode_pages):
+                page_tag = f"[[PAGE:{page_num + 1}]]"
+                cleaned_lines = DocumentProcessor._clean_pdf_page_lines(lines, repeated_header_footer)
+                if cleaned_lines:
+                    text_parts.append(f"{page_tag}\n" + "\n".join(cleaned_lines))
+                else:
+                    text_parts.append(page_tag)
             return "\n".join(text_parts)
         except Exception as exc:  # noqa: BLE001
             logger.warning("OCR识别PDF失败: %s | %s", file_path, exc)
@@ -323,6 +332,8 @@ class DocumentProcessor:
 
         cid_count = len(re.findall(r"\(cid:\d+\)", cleaned))
         chinese_count = len(re.findall(r"[\u4e00-\u9fff]", cleaned))
+        ascii_latin_count = len(re.findall(r"[A-Za-z0-9]", cleaned))
+        extended_latin_count = len(re.findall(r"[\u00C0-\u024F\u0250-\u02AF]", cleaned))
         structure_hits = sum(
             1
             for pattern in [
@@ -345,6 +356,14 @@ class DocumentProcessor:
             reasons.append("invalid_ratio_high")
         if len(non_ws) >= 200 and chinese_count == 0 and structure_hits == 0:
             reasons.append("no_structure_text")
+        if (
+            len(non_ws) >= 200
+            and structure_hits == 0
+            and chinese_count < max(10, len(non_ws) * 0.01)
+            and extended_latin_count > max(20, len(non_ws) * DocumentProcessor.PDF_GARBLED_EXTENDED_LATIN_RATIO)
+            and extended_latin_count > ascii_latin_count
+        ):
+            reasons.append("extended_latin_garbled")
 
         low_quality = bool(reasons)
         return {
@@ -355,13 +374,15 @@ class DocumentProcessor:
             "cid_count": cid_count,
             "invalid_ratio": invalid_ratio,
             "structure_hits": structure_hits,
+            "chinese_count": chinese_count,
+            "extended_latin_count": extended_latin_count,
         }
 
     @staticmethod
     def _is_reasonable_pdf_char(ch: str) -> bool:
         if ch.isspace():
             return True
-        if ch.isalnum():
+        if re.match(r"[A-Za-z0-9]", ch):
             return True
         if re.match(r"[\u4e00-\u9fff]", ch):
             return True

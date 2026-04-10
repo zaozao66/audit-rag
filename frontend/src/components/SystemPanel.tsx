@@ -3,13 +3,14 @@ import { Button, Card, Col, Row, Space, Statistic, Tag, Typography } from 'antd'
 import type { DocumentStats, InfoResponse } from '../types/rag';
 
 interface SystemPanelProps {
+  scope: 'audit' | 'discipline';
   info: InfoResponse | null;
   stats: DocumentStats | null;
   loading: boolean;
   onRefresh: () => void;
 }
 
-export function SystemPanel({ info, stats, loading, onRefresh }: SystemPanelProps) {
+export function SystemPanel({ scope, info, stats, loading, onRefresh }: SystemPanelProps) {
   return (
     <Card
       title="系统状态"
@@ -26,17 +27,19 @@ export function SystemPanel({ info, stats, loading, onRefresh }: SystemPanelProp
         <Col xs={24} sm={12} lg={8}><Statistic title="总分块" value={stats?.total_chunks ?? 0} /></Col>
       </Row>
 
-      <Card style={{ marginTop: 16 }} size="small" title="文档类型分布">
-        {stats && Object.keys(stats.by_type).length > 0 ? (
-          <Space wrap>
-            {Object.entries(stats.by_type).map(([type, value]) => (
-              <Tag key={type}>{type}: {value.count} docs / {value.chunks} chunks</Tag>
-            ))}
-          </Space>
-        ) : (
-          <Typography.Text type="secondary">暂无文档类型统计</Typography.Text>
-        )}
-      </Card>
+      {scope === 'audit' ? (
+        <Card style={{ marginTop: 16 }} size="small" title="文档类型分布">
+          {stats && Object.keys(stats.by_type).length > 0 ? (
+            <Space wrap>
+              {Object.entries(stats.by_type).map(([type, value]) => (
+                <Tag key={type}>{type}: {value.count} docs / {value.chunks} chunks</Tag>
+              ))}
+            </Space>
+          ) : (
+            <Typography.Text type="secondary">暂无文档类型统计</Typography.Text>
+          )}
+        </Card>
+      ) : null}
     </Card>
   );
 }

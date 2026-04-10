@@ -37,7 +37,7 @@ export function getInfo() {
 export function uploadFiles(payload: {
   files: File[];
   chunkerType: string;
-  docType: string;
+  docType?: string;
   title?: string;
   saveAfterProcessing?: boolean;
   searchable?: boolean;
@@ -47,7 +47,9 @@ export function uploadFiles(payload: {
   const form = new FormData();
   payload.files.forEach((file) => form.append('files', file));
   form.append('chunker_type', payload.chunkerType);
-  form.append('doc_type', payload.docType);
+  if (payload.docType?.trim()) {
+    form.append('doc_type', payload.docType.trim());
+  }
   form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
   form.append('searchable', String(payload.searchable ?? true));
   if (payload.title?.trim()) {
@@ -78,7 +80,7 @@ export function uploadFiles(payload: {
 export function uploadArchive(payload: {
   archive: File;
   chunkerType: string;
-  docType: string;
+  docType?: string;
   title?: string;
   saveAfterProcessing?: boolean;
   searchable?: boolean;
@@ -88,7 +90,9 @@ export function uploadArchive(payload: {
   const form = new FormData();
   form.append('archive', payload.archive);
   form.append('chunker_type', payload.chunkerType);
-  form.append('doc_type', payload.docType);
+  if (payload.docType?.trim()) {
+    form.append('doc_type', payload.docType.trim());
+  }
   form.append('save_after_processing', String(payload.saveAfterProcessing ?? true));
   form.append('searchable', String(payload.searchable ?? true));
   if (payload.title?.trim()) {

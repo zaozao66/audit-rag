@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--group-mode", choices=["subdir", "flat"], default="subdir", help="subdir=按一级子目录分组，flat=整个目录为一组")
     parser.add_argument("--root-group-name", default="root", help="flat 模式组名，或 subdir 模式下根目录散落文件的组名")
     parser.add_argument("--doc-type", default="internal_regulation", help="文档类型，例如 internal_regulation")
-    parser.add_argument("--chunker-type", default="smart", help="分块器类型，例如 smart / technical_standard")
+    parser.add_argument("--chunker-type", default="smart", help="分块器类型，例如 smart / regulation / speech_material / case_material / technical_standard")
     parser.add_argument("--classification-key", default="", help="从分组名派生知识分类的字段 key，例如 library")
     parser.add_argument("--label-map-json", default="", help="分组名到知识分类值的 JSON 映射，例如 {\"国家法律法规\":\"national_laws\"}")
     parser.add_argument("--label-map-file", default="", help="分组名到知识分类值的 JSON 文件路径")

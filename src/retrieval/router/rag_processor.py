@@ -25,8 +25,10 @@ from src.indexing.vector.embedding_providers import EmbeddingProvider
 from src.indexing.vector.vector_store import VectorStore
 from src.ingestion.splitters.audit_issue_chunker import AuditIssueChunker
 from src.ingestion.splitters.audit_report_chunker import AuditReportChunker
+from src.ingestion.splitters.case_material_chunker import CaseMaterialChunker
 from src.ingestion.splitters.document_chunker import DocumentChunker
 from src.ingestion.splitters.law_document_chunker import LawDocumentChunker
+from src.ingestion.splitters.speech_material_chunker import SpeechMaterialChunker
 from src.ingestion.splitters.technical_standard_chunker import TechnicalStandardChunker
 from src.ingestion.splitters.smart_chunker import SmartChunker
 from src.llm.providers.llm_provider import LLMProvider
@@ -110,6 +112,10 @@ class RAGProcessor:
             self.chunker = LawDocumentChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type == "technical_standard":
             self.chunker = TechnicalStandardChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == "speech_material":
+            self.chunker = SpeechMaterialChunker(chunk_size=chunk_size, overlap=overlap)
+        elif chunker_type == "case_material":
+            self.chunker = CaseMaterialChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type == "audit_report":
             self.chunker = AuditReportChunker(chunk_size=chunk_size, overlap=overlap)
         elif chunker_type == "audit_issue":

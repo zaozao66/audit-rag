@@ -7,7 +7,8 @@ IMPORT_SCRIPT="${SCRIPT_DIR}/batch_import_archives.py"
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
 SCOPE="${SCOPE:-discipline}"
-INPUT_ROOT="${INPUT_ROOT:-/data/discipline_import}"
+INPUT_ROOT="${INPUT_ROOT:-${HOME}/clawspace/discipline_import}"
+GROUP_MODE="${GROUP_MODE:-flat}"
 
 BATCH_MAX_FILES="${BATCH_MAX_FILES:-100}"
 BATCH_MAX_SOURCE_BYTES="${BATCH_MAX_SOURCE_BYTES:-125829120}"
@@ -17,7 +18,7 @@ VERIFY_SSL="${VERIFY_SSL:-true}"
 COMMON_ARGS=(
   --base-url "${BASE_URL}"
   --scope "${SCOPE}"
-  --group-mode flat
+  --group-mode "${GROUP_MODE}"
   --batch-max-files "${BATCH_MAX_FILES}"
   --batch-max-source-bytes "${BATCH_MAX_SOURCE_BYTES}"
   --timeout-seconds "${TIMEOUT_SECONDS}"
@@ -48,7 +49,7 @@ echo "1/4 导入 重要讲话精神"
   --classification-key library \
   --label-map-json '{"重要讲话精神":"important_speeches"}' \
   --doc-type internal_report \
-  --chunker-type audit_report
+  --chunker-type speech_material
 
 echo "2/4 导入 国家法律法规"
 "${PYTHON_BIN}" "${IMPORT_SCRIPT}" \
@@ -78,6 +79,6 @@ echo "4/4 导入 典型案例库"
   --classification-key library \
   --label-map-json '{"典型案例库":"case_library"}' \
   --doc-type internal_report \
-  --chunker-type audit_report
+  --chunker-type case_material
 
 echo "全部批次执行完成"

@@ -59,7 +59,7 @@ export default function App() {
     setLoadingDocs(true);
     try {
       const data = await listDocuments({
-        docType,
+        docType: scope === 'discipline' ? '' : docType,
         keyword,
         knowledgeFilters: docKnowledgeFilters,
       });
@@ -74,6 +74,12 @@ export default function App() {
       window.localStorage.setItem('rag.scope', scope);
     }
   }, [scope]);
+
+  useEffect(() => {
+    if (scope === 'discipline' && docType) {
+      setDocType('');
+    }
+  }, [docType, scope]);
 
   useEffect(() => {
     setDocKnowledgeFilters((prev) => {
@@ -205,7 +211,7 @@ export default function App() {
                     keyword={keyword}
                     knowledgeFilters={docKnowledgeFilters}
                     onFilterChange={({ docType: nextType, keyword: nextKeyword, knowledgeFilters: nextFilters }) => {
-                      setDocType(nextType);
+                      setDocType(scope === 'discipline' ? '' : nextType);
                       setKeyword(nextKeyword);
                       setDocKnowledgeFilters(nextFilters);
                     }}
@@ -233,7 +239,7 @@ export default function App() {
             />
             <Route
               path="/system"
-              element={<SystemPanel info={info} stats={stats} loading={loadingMeta} onRefresh={loadMeta} />}
+              element={<SystemPanel scope={scope} info={info} stats={stats} loading={loadingMeta} onRefresh={loadMeta} />}
             />
             <Route path="*" element={<Navigate to="/chat" replace />} />
           </Routes>
