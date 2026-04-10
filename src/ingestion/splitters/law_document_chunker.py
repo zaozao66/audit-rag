@@ -370,8 +370,8 @@ class LawDocumentChunker(DocumentChunker):
                 # 保存当前块
                 chunk = {
                     'doc_id': '',
-                    'filename': 'law_document',
-                    'file_type': 'txt',
+                    'filename': document.get('filename', 'law_document'),
+                    'file_type': document.get('file_type', 'txt'),
                     'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
                     'title': document.get('title', ''),  # 添加标题
                     'text': current_chunk.strip(),
@@ -393,8 +393,8 @@ class LawDocumentChunker(DocumentChunker):
         if current_chunk.strip() and len(current_chunk.strip()) > len(title_part.strip()):
             chunk = {
                 'doc_id': '',
-                'filename': 'law_document',
-                'file_type': 'txt',
+                'filename': document.get('filename', 'law_document'),
+                'file_type': document.get('file_type', 'txt'),
                 'doc_type': document.get('doc_type', 'internal_regulation'),  # 添加文档类型
                 'title': document.get('title', ''),  # 添加标题
                 'text': current_chunk.strip(),

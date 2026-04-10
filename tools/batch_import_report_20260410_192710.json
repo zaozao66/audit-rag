@@ -1,0 +1,64 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "scope": "discipline",
+  "input_dir": "/Users/zhouzihao/clawspace/discipline_import/重要讲话精神",
+  "doc_type": "internal_report",
+  "chunker_type": "speech_material",
+  "classification_key": "library",
+  "skipped_files": [],
+  "batches": [
+    {
+      "group_name": "重要讲话精神",
+      "batch_index": 1,
+      "file_count": 13,
+      "source_bytes": 21223274,
+      "archive_size": 21030597,
+      "archive_name": "重要讲话精神_part001.zip",
+      "knowledge_labels": {
+        "library": [
+          "important_speeches"
+        ]
+      },
+      "status_code": 200,
+      "ok": true,
+      "payload": {
+        "archive_name": "重要讲话精神_part001.zip",
+        "chunker_used": "speech_material",
+        "extracted_count": 13,
+        "failed_files": [],
+        "file_count": 13,
+        "message": "处理完成: 新增 13 个, 跳过 0 个重复, 更新 0 个",
+        "processed_count": 13,
+        "skipped_count": 0,
+        "success": true,
+        "total_chunks": 149,
+        "unsupported_files": [],
+        "updated_count": 0
+      },
+      "files": [
+        "习近平在二十届中央纪委三次全会上发表重要讲话.pdf",
+        "习近平在二十届中央纪委二次全会上发表重要讲话.pdf",
+        "习近平在十九届中央纪委三次全会上发表重要讲话.pdf",
+        "习近平在十九届中央纪委二次全会上发表重要讲话.pdf",
+        "习近平在十九届中央纪委五次全会上发表重要讲话.pdf",
+        "习近平在十九届中央纪委六次全会上发表重要讲话.pdf",
+        "习近平在十九届中央纪委四次全会上发表重要讲话.pdf",
+        "习近平在十八届中央纪委七次全会上发表重要讲话.pdf",
+        "习近平在十八届中央纪委三次全会上发表重要讲话.pdf",
+        "习近平在十八届中央纪委二次全会上发表重要讲话.pdf",
+        "习近平在十八届中央纪委五次全会上发表重要讲话.pdf",
+        "习近平在十八届中央纪委六次全会上发表重要讲话.pdf",
+        "习近平总书记关于巡视巡察工作的重要论述摘编（节选）.pdf"
+      ]
+    }
+  ],
+  "started_at": "2026-04-10T19:24:12.839773",
+  "finished_at": "2026-04-10T19:27:10.100270",
+  "summary": {
+    "batch_count": 1,
+    "success_batches": 1,
+    "failed_batches": 0,
+    "source_file_count": 13,
+    "skipped_file_count": 0
+  }
+}

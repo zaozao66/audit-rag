@@ -59,7 +59,7 @@ echo "2/4 导入 国家法律法规"
   --classification-key library \
   --label-map-json '{"国家法律法规":"national_laws"}' \
   --doc-type internal_regulation \
-  --chunker-type regulation
+  --chunker-type smart
 
 echo "3/4 导入 常用党内法规"
 "${PYTHON_BIN}" "${IMPORT_SCRIPT}" \
@@ -69,7 +69,7 @@ echo "3/4 导入 常用党内法规"
   --classification-key library \
   --label-map-json '{"常用党内法规":"party_regulations"}' \
   --doc-type internal_regulation \
-  --chunker-type regulation
+  --chunker-type smart
 
 echo "4/4 导入 典型案例库"
 "${PYTHON_BIN}" "${IMPORT_SCRIPT}" \

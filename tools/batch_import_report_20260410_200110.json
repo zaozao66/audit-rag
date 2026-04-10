@@ -1,0 +1,53 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "scope": "discipline",
+  "input_dir": "/Users/zhouzihao/clawspace/discipline_import/典型案例库",
+  "doc_type": "internal_report",
+  "chunker_type": "case_material",
+  "classification_key": "library",
+  "skipped_files": [],
+  "batches": [
+    {
+      "group_name": "典型案例库",
+      "batch_index": 1,
+      "file_count": 2,
+      "source_bytes": 328611,
+      "archive_size": 321129,
+      "archive_name": "典型案例库_part001.zip",
+      "knowledge_labels": {
+        "library": [
+          "case_library"
+        ]
+      },
+      "status_code": 200,
+      "ok": true,
+      "payload": {
+        "archive_name": "典型案例库_part001.zip",
+        "chunker_used": "case_material",
+        "extracted_count": 2,
+        "failed_files": [],
+        "file_count": 2,
+        "message": "处理完成: 新增 2 个, 跳过 0 个重复, 更新 0 个",
+        "processed_count": 2,
+        "skipped_count": 0,
+        "success": true,
+        "total_chunks": 17645,
+        "unsupported_files": [],
+        "updated_count": 0
+      },
+      "files": [
+        "准入关口的失守——中国银联股份有限公司某业务运营团队原主管刘某某案件.pdf",
+        "守库者监守自盗行权者以权谋私——原中国人民银行某支行某处长阚某某、某副处长江某某案件.pdf"
+      ]
+    }
+  ],
+  "started_at": "2026-04-10T20:01:01.156041",
+  "finished_at": "2026-04-10T20:01:10.123827",
+  "summary": {
+    "batch_count": 1,
+    "success_batches": 1,
+    "failed_batches": 0,
+    "source_file_count": 2,
+    "skipped_file_count": 0
+  }
+}

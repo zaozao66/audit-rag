@@ -280,6 +280,8 @@ def store_documents():
                 "updated_count": num_processed.get('updated', 0),
                 "total_chunks": num_processed.get('total_chunks', 0),
                 "chunker_used": chunker_type,
+                "chunk_quality": num_processed.get('chunk_quality', []),
+                "chunk_quality_summary": num_processed.get('chunk_quality_summary', {}),
             })
 
         return jsonify({
@@ -627,6 +629,8 @@ def upload_and_store_documents():
                 "total_chunks": num_processed.get('total_chunks', 0),
                 "failed_files": parse_errors,
                 "chunker_used": chunker_type,
+                "chunk_quality": num_processed.get('chunk_quality', []),
+                "chunk_quality_summary": num_processed.get('chunk_quality_summary', {}),
             })
 
         return jsonify({
@@ -768,6 +772,8 @@ def upload_archive_and_store_documents():
                 "updated_count": num_processed.get('updated', 0),
                 "total_chunks": num_processed.get('total_chunks', 0),
                 "chunker_used": chunker_type,
+                "chunk_quality": num_processed.get('chunk_quality', []),
+                "chunk_quality_summary": num_processed.get('chunk_quality_summary', {}),
             })
 
         return jsonify({

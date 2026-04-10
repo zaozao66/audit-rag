@@ -8,6 +8,11 @@ from typing import List, Dict, Any, Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+FILTERED_SEARCH_MULTIPLIER = 50
+FILTERED_SEARCH_MIN_CANDIDATES = 300
+FILTERED_SEARCH_FALLBACK_MULTIPLIER = 200
+FILTERED_SEARCH_FALLBACK_MIN_CANDIDATES = 3000
+
 
 class VectorStore:
     """向量存储类 - 使用Faiss进行高效向量相似性搜索"""
@@ -80,6 +85,82 @@ class VectorStore:
 
         return True
 
+    @staticmethod
+    def _has_effective_knowledge_filters(knowledge_filters: Optional[Dict[str, List[str]]]) -> bool:
+        if not knowledge_filters:
+            return False
+
+        for raw_key, raw_expected in knowledge_filters.items():
+            key = str(raw_key or '').strip()
+            expected = [str(item or '').strip() for item in (raw_expected or []) if str(item or '').strip()]
+            if key and expected:
+                return True
+        return False
+
+    @classmethod
+    def _has_post_filters(
+        cls,
+        doc_types: Optional[List[str]],
+        titles: Optional[List[str]],
+        knowledge_filters: Optional[Dict[str, List[str]]],
+    ) -> bool:
+        return bool(doc_types or titles or cls._has_effective_knowledge_filters(knowledge_filters))
+
+    @staticmethod
+    def _candidate_limits(top_k: int, total: int, has_post_filters: bool) -> List[int]:
+        if total <= 0:
+            return []
+
+        safe_top_k = max(1, int(top_k or 1))
+        if not has_post_filters:
+            return [min(max(safe_top_k * 10, safe_top_k), total)]
+
+        initial = min(max(safe_top_k * FILTERED_SEARCH_MULTIPLIER, FILTERED_SEARCH_MIN_CANDIDATES), total)
+        fallback = min(max(safe_top_k * FILTERED_SEARCH_FALLBACK_MULTIPLIER, FILTERED_SEARCH_FALLBACK_MIN_CANDIDATES), total)
+        return list(dict.fromkeys([initial, fallback]))
+
+    def _filter_search_results(
+        self,
+        scores,
+        indices,
+        top_k: int,
+        doc_types: Optional[List[str]] = None,
+        titles: Optional[List[str]] = None,
+        knowledge_filters: Optional[Dict[str, List[str]]] = None,
+    ) -> List[Dict[str, Any]]:
+        results = []
+        for i in range(len(indices[0])):
+            idx = indices[0][i]
+            if idx >= len(self.documents) or idx == -1:
+                continue
+
+            doc = self.documents[idx]
+
+            if doc.get('status') == 'deleted':
+                continue
+            if doc.get('searchable') is False:
+                continue
+            if not doc.get('text'):
+                continue
+
+            if doc_types and doc.get('doc_type') not in doc_types:
+                continue
+
+            if titles and doc.get('title') not in titles:
+                continue
+            if not self._matches_knowledge_filters(doc, knowledge_filters):
+                continue
+
+            results.append({
+                'document': doc,
+                'score': float(scores[0][i])
+            })
+
+            if len(results) >= top_k:
+                break
+
+        return results
+
     def search(
         self,
         query_embedding: List[float],
@@ -96,51 +177,65 @@ class VectorStore:
         :param titles: 标题过滤列表 (可选)
         :return: 包含相似文档和相似度分数的结果列表
         """
+        try:
+            safe_top_k = max(1, int(top_k or 1))
+        except (TypeError, ValueError):
+            safe_top_k = 5
+
+        if self.index.ntotal <= 0:
+            return []
+
         # 将查询向量转换为numpy数组
         query_array = np.array([query_embedding]).astype('float32')
         
         # 如果使用内积度量，需要对查询向量也进行归一化
         if self.metric_type == faiss.METRIC_INNER_PRODUCT:
             faiss.normalize_L2(query_array)
-        
-        # 执行Faiss搜索
-        scores, indices = self.index.search(query_array, min(top_k * 10, self.index.ntotal))  # 搜索更多结果以进行过滤
-        
-        results = []
-        # 处理搜索结果
-        for i in range(len(indices[0])):
-            idx = indices[0][i]
-            if idx < len(self.documents) and idx != -1:
-                doc = self.documents[idx]
 
-                if doc.get('status') == 'deleted':
-                    continue
-                if doc.get('searchable') is False:
-                    continue
-                if not doc.get('text'):
-                    continue
-                
-                # 应用过滤条件
-                if doc_types and doc.get('doc_type') not in doc_types:
-                    continue
-                    
-                if titles and doc.get('title') not in titles:
-                    continue
-                if not self._matches_knowledge_filters(doc, knowledge_filters):
-                    continue
-                
-                result = {
-                    'document': doc,
-                    'score': float(scores[0][i])  # 相似度分数
-                }
-                results.append(result)
-                
-                # 如果已收集到足够的结果，停止搜索
-                if len(results) >= top_k:
-                    break
-        
-        # 如果结果太多，只返回top_k个
-        return results[:top_k]
+        has_post_filters = self._has_post_filters(doc_types, titles, knowledge_filters)
+        candidate_limits = self._candidate_limits(safe_top_k, self.index.ntotal, has_post_filters)
+        results: List[Dict[str, Any]] = []
+        used_limit = 0
+
+        for idx, candidate_limit in enumerate(candidate_limits):
+            used_limit = candidate_limit
+            scores, indices = self.index.search(query_array, candidate_limit)
+            results = self._filter_search_results(
+                scores=scores,
+                indices=indices,
+                top_k=safe_top_k,
+                doc_types=doc_types,
+                titles=titles,
+                knowledge_filters=knowledge_filters,
+            )
+
+            if len(results) >= safe_top_k or candidate_limit >= self.index.ntotal:
+                break
+
+            logger.info(
+                "过滤后向量检索结果不足，扩大候选池重试: matched=%s top_k=%s candidate_count=%s next_candidate_count=%s doc_types=%s titles=%s knowledge_filters=%s",
+                len(results),
+                safe_top_k,
+                candidate_limit,
+                candidate_limits[idx + 1] if idx + 1 < len(candidate_limits) else candidate_limit,
+                doc_types,
+                titles,
+                knowledge_filters,
+            )
+
+        if has_post_filters:
+            logger.info(
+                "向量检索过滤统计: matched=%s top_k=%s candidate_count=%s index_total=%s doc_types=%s titles=%s knowledge_filters=%s",
+                len(results),
+                safe_top_k,
+                used_limit,
+                self.index.ntotal,
+                doc_types,
+                titles,
+                knowledge_filters,
+            )
+
+        return results[:safe_top_k]
     
     def save(self, filepath: str):
         """

@@ -327,6 +327,43 @@ def build_report_path(explicit_path: str) -> str:
     return os.path.abspath(f"batch_import_report_{timestamp}.json")
 
 
+def summarize_chunk_quality(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not reports:
+        return {
+            "document_count": 0,
+            "chunk_count": 0,
+            "documents_with_long_chunks": 0,
+            "documents_with_embedding_over_limit_chunks": 0,
+            "documents_with_oversized_splits": 0,
+            "documents_with_suspected_toc": 0,
+            "documents_with_duplicate_prefixes": 0,
+            "documents_with_filename_mismatch": 0,
+            "top_max_chunk_docs": [],
+        }
+
+    return {
+        "document_count": len(reports),
+        "chunk_count": sum(int(item.get("chunk_count", 0) or 0) for item in reports),
+        "documents_with_long_chunks": sum(1 for item in reports if int(item.get("long_chunk_count", 0) or 0) > 0),
+        "documents_with_embedding_over_limit_chunks": sum(1 for item in reports if int(item.get("embedding_over_limit_count", 0) or 0) > 0),
+        "documents_with_oversized_splits": sum(1 for item in reports if int(item.get("oversized_split_source_count", 0) or 0) > 0),
+        "documents_with_suspected_toc": sum(1 for item in reports if int(item.get("suspected_toc_count", 0) or 0) > 0),
+        "documents_with_duplicate_prefixes": sum(1 for item in reports if int(item.get("duplicate_prefix_count", 0) or 0) > 0),
+        "documents_with_filename_mismatch": sum(1 for item in reports if int(item.get("filename_mismatch_count", 0) or 0) > 0),
+        "top_max_chunk_docs": [
+            {
+                "filename": item.get("filename", ""),
+                "batch_group_name": item.get("batch_group_name", ""),
+                "chunk_count": item.get("chunk_count", 0),
+                "max_chunk_chars": item.get("max_chunk_chars", 0),
+                "resolved_chunker_types": item.get("resolved_chunker_types", []),
+                "chunker_route_reasons": item.get("chunker_route_reasons", []),
+            }
+            for item in sorted(reports, key=lambda entry: int(entry.get("max_chunk_chars", 0) or 0), reverse=True)[:10]
+        ],
+    }
+
+
 def main() -> int:
     args = parse_args()
 
@@ -385,6 +422,7 @@ def main() -> int:
 
     failures = 0
     uploaded = 0
+    all_chunk_quality: List[Dict[str, Any]] = []
 
     for batch in batches:
         knowledge_labels = build_batch_labels(
@@ -436,9 +474,30 @@ def main() -> int:
                     f"skipped={payload.get('skipped_count', 0)} "
                     f"updated={payload.get('updated_count', 0)}"
                 )
+                chunk_quality_summary = payload.get("chunk_quality_summary")
+                if isinstance(chunk_quality_summary, dict) and chunk_quality_summary:
+                    print(
+                        "  切片质量 | "
+                        f"docs={chunk_quality_summary.get('document_count', 0)} "
+                        f"chunks={chunk_quality_summary.get('chunk_count', 0)} "
+                        f"long_docs={chunk_quality_summary.get('documents_with_long_chunks', 0)} "
+                        f"split_docs={chunk_quality_summary.get('documents_with_oversized_splits', 0)} "
+                        f"toc_docs={chunk_quality_summary.get('documents_with_suspected_toc', 0)}"
+                    )
             else:
                 failures += 1
                 print(f"  失败 | status={result['status_code']} | payload={payload}", file=sys.stderr)
+
+            batch_chunk_quality = payload.get("chunk_quality")
+            if isinstance(batch_chunk_quality, list):
+                for item in batch_chunk_quality:
+                    if not isinstance(item, dict):
+                        continue
+                    quality_item = dict(item)
+                    quality_item["batch_group_name"] = batch.group_name
+                    quality_item["batch_index"] = batch.batch_index
+                    quality_item["archive_name"] = archive_name
+                    all_chunk_quality.append(quality_item)
 
             report["batches"].append(
                 {
@@ -492,6 +551,8 @@ def main() -> int:
         "source_file_count": len(source_files),
         "skipped_file_count": len(skipped_files),
     }
+    report["chunk_quality"] = all_chunk_quality
+    report["chunk_quality_summary"] = summarize_chunk_quality(all_chunk_quality)
 
     report_path = build_report_path(args.report_file)
     with open(report_path, "w", encoding="utf-8") as f:
@@ -502,6 +563,18 @@ def main() -> int:
         f"完成: success_batches={report['summary']['success_batches']} "
         f"failed_batches={report['summary']['failed_batches']}"
     )
+    quality_summary = report["chunk_quality_summary"]
+    if quality_summary["document_count"]:
+        print(
+            "切片质量汇总: "
+            f"docs={quality_summary['document_count']} "
+            f"chunks={quality_summary['chunk_count']} "
+            f"long_docs={quality_summary['documents_with_long_chunks']} "
+            f"split_docs={quality_summary['documents_with_oversized_splits']} "
+            f"toc_docs={quality_summary['documents_with_suspected_toc']} "
+            f"duplicate_docs={quality_summary['documents_with_duplicate_prefixes']} "
+            f"filename_mismatch_docs={quality_summary['documents_with_filename_mismatch']}"
+        )
     return 1 if failures > 0 else 0
 
 

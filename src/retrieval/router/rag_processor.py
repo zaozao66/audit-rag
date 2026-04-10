@@ -47,6 +47,8 @@ RECTIFICATION_STATUS_LABELS = {
 EVIDENCE_NODE_TYPES = {ontology.ENTITY_CHUNK, ontology.ENTITY_DOCUMENT}
 EMBEDDING_INPUT_MAX_CHARS = 8192
 EMBEDDING_SAFE_CHUNK_MAX_CHARS = 6000
+CHUNK_QUALITY_SHORT_CHARS = 80
+CHUNK_QUALITY_LONG_CHARS = 2000
 REGULATION_DOC_TYPES = {"internal_regulation", "external_regulation"}
 ACCOUNTING_STANDARD_ROOT_PATTERN = re.compile(
     r"^(企业会计准则第\s*[一二三四五六七八九十百千万零〇两\d]+\s*号[^\n]{0,120}|企业会计准则应用指南[^\n]{0,120})$"
@@ -818,6 +820,171 @@ class RAGProcessor:
                 text_len,
             )
 
+    @staticmethod
+    def _percentile_int(values: List[int], percentile: float) -> int:
+        if not values:
+            return 0
+        ordered = sorted(values)
+        index = int(round((len(ordered) - 1) * percentile))
+        index = max(0, min(index, len(ordered) - 1))
+        return int(ordered[index])
+
+    @staticmethod
+    def _looks_like_toc_chunk(text: str) -> bool:
+        lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+        if not lines:
+            return False
+        if any(re.fullmatch(r"目\s*(录|次)", line) for line in lines[:5]):
+            return True
+
+        toc_like_lines = 0
+        for line in lines[:30]:
+            if re.search(r"[.．…·•]{2,}\s*[IVXLC\d]{1,5}\s*$", line):
+                toc_like_lines += 1
+                continue
+            if len(line) <= 120 and re.search(r"\s+\d{1,4}\s*$", line):
+                if re.match(r"^(第[一二三四五六七八九十百千万零〇两\d]+[章节条]|[一二三四五六七八九十百千万零〇两\d]+、|\d+(?:\.\d+)*)", line):
+                    toc_like_lines += 1
+
+        return toc_like_lines >= 3
+
+    @staticmethod
+    def _duplicate_prefix_count(chunks: List[Dict[str, Any]], prefix_chars: int = 80) -> int:
+        prefix_counts: Dict[str, int] = defaultdict(int)
+        for chunk in chunks:
+            compact = re.sub(r"\s+", "", str(chunk.get("text", "") or ""))
+            if len(compact) < max(40, prefix_chars // 2):
+                continue
+            prefix_counts[compact[:prefix_chars]] += 1
+        return sum(count - 1 for count in prefix_counts.values() if count > 1)
+
+    def _build_chunk_quality_report(self, doc: Dict[str, Any], chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        filename = str(doc.get("filename", "") or "unknown")
+        lengths = [len(str(chunk.get("text", "") or "")) for chunk in chunks]
+        requested_chunker_types = sorted({
+            str(chunk.get("requested_chunker_type") or self.chunker_type or "").strip()
+            for chunk in chunks
+            if str(chunk.get("requested_chunker_type") or self.chunker_type or "").strip()
+        })
+        resolved_chunker_types = sorted({
+            str(chunk.get("resolved_chunker_type") or chunk.get("chunker_used") or self.chunker_type or "").strip()
+            for chunk in chunks
+            if str(chunk.get("resolved_chunker_type") or chunk.get("chunker_used") or self.chunker_type or "").strip()
+        })
+        chunker_route_reasons = sorted({
+            str(chunk.get("chunker_route_reason") or "").strip()
+            for chunk in chunks
+            if str(chunk.get("chunker_route_reason") or "").strip()
+        })
+        split_source_ids = {
+            str(chunk.get("split_from_chunk_id") or "")
+            for chunk in chunks
+            if str(chunk.get("split_from_chunk_id") or "").strip()
+        }
+
+        filename_mismatch_samples: List[Dict[str, Any]] = []
+        long_chunk_samples: List[Dict[str, Any]] = []
+        toc_samples: List[Dict[str, Any]] = []
+        filename_mismatch_count = 0
+        long_chunk_count = 0
+        embedding_over_limit_count = 0
+        suspected_toc_count = 0
+
+        for chunk in chunks:
+            chunk_filename = str(chunk.get("filename", "") or "")
+            chunk_id = str(chunk.get("chunk_id", "") or "")
+            text = str(chunk.get("text", "") or "")
+            text_len = len(text)
+
+            if chunk_filename and chunk_filename != filename:
+                filename_mismatch_count += 1
+                if len(filename_mismatch_samples) < 3:
+                    filename_mismatch_samples.append({
+                        "chunk_id": chunk_id,
+                        "filename": chunk_filename,
+                    })
+
+            if text_len > CHUNK_QUALITY_LONG_CHARS:
+                long_chunk_count += 1
+                if len(long_chunk_samples) < 3:
+                    long_chunk_samples.append({
+                        "chunk_id": chunk_id,
+                        "char_count": text_len,
+                        "header": chunk.get("header", ""),
+                    })
+            if text_len > EMBEDDING_INPUT_MAX_CHARS:
+                embedding_over_limit_count += 1
+
+            if self._looks_like_toc_chunk(text):
+                suspected_toc_count += 1
+                if len(toc_samples) < 3:
+                    toc_samples.append({
+                        "chunk_id": chunk_id,
+                        "header": chunk.get("header", ""),
+                    })
+
+        return {
+            "filename": filename,
+            "doc_id": str(doc.get("doc_id", "") or ""),
+            "doc_type": str(doc.get("doc_type", "") or ""),
+            "requested_chunker_types": requested_chunker_types,
+            "resolved_chunker_types": resolved_chunker_types,
+            "chunker_route_reasons": chunker_route_reasons,
+            "ingest_profile": str(doc.get("ingest_profile", "") or ""),
+            "chunk_count": len(chunks),
+            "min_chunk_chars": min(lengths) if lengths else 0,
+            "p50_chunk_chars": self._percentile_int(lengths, 0.5),
+            "p90_chunk_chars": self._percentile_int(lengths, 0.9),
+            "max_chunk_chars": max(lengths) if lengths else 0,
+            "short_chunk_count": sum(1 for length in lengths if 0 < length < CHUNK_QUALITY_SHORT_CHARS),
+            "long_chunk_count": long_chunk_count,
+            "embedding_over_limit_count": embedding_over_limit_count,
+            "oversized_split_part_count": sum(1 for chunk in chunks if chunk.get("split_from_chunk_id")),
+            "oversized_split_source_count": len(split_source_ids),
+            "duplicate_prefix_count": self._duplicate_prefix_count(chunks),
+            "suspected_toc_count": suspected_toc_count,
+            "filename_mismatch_count": filename_mismatch_count,
+            "long_chunk_samples": long_chunk_samples,
+            "suspected_toc_samples": toc_samples,
+            "filename_mismatch_samples": filename_mismatch_samples,
+        }
+
+    @staticmethod
+    def _summarize_chunk_quality(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not reports:
+            return {
+                "document_count": 0,
+                "chunk_count": 0,
+                "documents_with_long_chunks": 0,
+                "documents_with_embedding_over_limit_chunks": 0,
+                "documents_with_oversized_splits": 0,
+                "documents_with_suspected_toc": 0,
+                "documents_with_duplicate_prefixes": 0,
+                "documents_with_filename_mismatch": 0,
+                "top_max_chunk_docs": [],
+            }
+
+        return {
+            "document_count": len(reports),
+            "chunk_count": sum(int(report.get("chunk_count", 0) or 0) for report in reports),
+            "documents_with_long_chunks": sum(1 for report in reports if int(report.get("long_chunk_count", 0) or 0) > 0),
+            "documents_with_embedding_over_limit_chunks": sum(1 for report in reports if int(report.get("embedding_over_limit_count", 0) or 0) > 0),
+            "documents_with_oversized_splits": sum(1 for report in reports if int(report.get("oversized_split_source_count", 0) or 0) > 0),
+            "documents_with_suspected_toc": sum(1 for report in reports if int(report.get("suspected_toc_count", 0) or 0) > 0),
+            "documents_with_duplicate_prefixes": sum(1 for report in reports if int(report.get("duplicate_prefix_count", 0) or 0) > 0),
+            "documents_with_filename_mismatch": sum(1 for report in reports if int(report.get("filename_mismatch_count", 0) or 0) > 0),
+            "top_max_chunk_docs": [
+                {
+                    "filename": report.get("filename", ""),
+                    "chunk_count": report.get("chunk_count", 0),
+                    "max_chunk_chars": report.get("max_chunk_chars", 0),
+                    "resolved_chunker_types": report.get("resolved_chunker_types", []),
+                    "chunker_route_reasons": report.get("chunker_route_reasons", []),
+                }
+                for report in sorted(reports, key=lambda item: int(item.get("max_chunk_chars", 0) or 0), reverse=True)[:10]
+            ],
+        }
+
     def process_documents(self, documents: List[Dict[str, Any]], save_after_processing: bool = True) -> Dict:
         processed_count = 0
         skipped_count = 0
@@ -826,6 +993,7 @@ class RAGProcessor:
         pending_existing_updates: List[Dict[str, Any]] = []
         pending_index_entries: List[Dict[str, Any]] = []
         remove_from_index_ids: List[str] = []
+        chunk_quality_reports: List[Dict[str, Any]] = []
 
         for doc in documents:
             content = doc["text"]
@@ -842,10 +1010,13 @@ class RAGProcessor:
             chunks = self.chunker.chunk_documents([doc])
             chunks = self._normalize_chunks(chunks, doc_id)
             for chunk in chunks:
+                chunk.setdefault("requested_chunker_type", self.chunker_type)
+                chunk.setdefault("resolved_chunker_type", self.chunker_type)
                 chunk["searchable"] = searchable
                 chunk["status"] = "active"
                 chunk["knowledge_labels"] = knowledge_labels
             self._log_oversized_chunks(chunks)
+            chunk_quality_reports.append(self._build_chunk_quality_report(doc, chunks))
 
             if not chunks:
                 logger.warning("文档未生成有效分块: %s", doc.get("filename", "unknown"))
@@ -1030,6 +1201,8 @@ class RAGProcessor:
             "skipped": skipped_count,
             "updated": updated_count,
             "total_chunks": sum(c.chunk_count for c in self.metadata_store.list_documents()),
+            "chunk_quality": chunk_quality_reports,
+            "chunk_quality_summary": self._summarize_chunk_quality(chunk_quality_reports),
         }
 
     def _search_vector_raw(
